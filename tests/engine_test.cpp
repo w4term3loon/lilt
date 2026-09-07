@@ -1,6 +1,7 @@
 #include "engine.hpp"
 #include "text.hpp"
 #include "streaming_text.hpp"
+#include <whisper.h>
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -157,45 +158,46 @@ void preview_tests() {
 }
 
 void audio_tests(const std::filesystem::path& directory) {
+    lilt::Engine engine;
     const auto missing = (directory / "missing.bin").string();
-    expect(lilt::Engine::transcribe(missing, {}).empty(), "Empty audio skips the model");
-    expect(lilt::Engine::transcribe(missing, std::vector<float>(32000, 0)).empty(), "Silence skips the model");
-    expect(lilt::Engine::transcribe(missing, std::vector<float>(32000, 0.00001f)).empty(), "Near-silence skips the model");
-    expect(lilt::Engine::transcribe(missing, std::vector<float>(100, 0.2f)).empty(), "Click-length audio is rejected");
-    expect_error([&] { lilt::Engine::transcribe(missing, std::vector<float>(3200, 0.2f)); },
+    expect(engine.transcribe(missing, {}).empty(), "Empty audio skips the model");
+    expect(engine.transcribe(missing, std::vector<float>(32000, 0)).empty(), "Silence skips the model");
+    expect(engine.transcribe(missing, std::vector<float>(32000, 0.00001f)).empty(), "Near-silence skips the model");
+    expect(engine.transcribe(missing, std::vector<float>(100, 0.2f)).empty(), "Click-length audio is rejected");
+    expect_error([&] { engine.transcribe(missing, std::vector<float>(3200, 0.2f)); },
                  "Audible input requires a model");
-    expect_error([&] { lilt::Engine::transcribe(missing, std::vector<float>(3200, 0.2f), "not-a-language"); },
-                 "Invalid language rejected");
-    expect_error([&] { lilt::Engine::transcribe(missing, {std::numeric_limits<float>::quiet_NaN()}); },
+    expect_error([&] { engine.transcribe(missing, {std::numeric_limits<float>::quiet_NaN()}); },
                  "Nonfinite samples rejected");
-    expect_error([&] { lilt::Engine::transcribe(missing, std::vector<float>(16000 * 180 + 1)); },
+    expect_error([&] { engine.transcribe(missing, std::vector<float>(16000 * 180 + 1)); },
                  "Long audio rejected before model load");
 
     const auto filename = directory / "input.wav";
     write(filename, wav());
-    expect(lilt::Engine::transcribe_file(missing, filename.string()).empty(), "PCM16 silence WAV accepted");
+    expect(engine.transcribe_file(missing, filename.string()).empty(), "PCM16 silence WAV accepted");
     write(filename, wav(3, 16000, 1, 32));
-    expect(lilt::Engine::transcribe_file(missing, filename.string()).empty(), "Float32 silence WAV accepted");
+    expect(engine.transcribe_file(missing, filename.string()).empty(), "Float32 silence WAV accepted");
     write(filename, wav(1, 16000, 1, 16, 3200, true));
-    expect(lilt::Engine::transcribe_file(missing, filename.string()).empty(), "Odd metadata chunk padding accepted");
+    expect(engine.transcribe_file(missing, filename.string()).empty(), "Odd metadata chunk padding accepted");
     write(filename, wav(1, 44100));
-    expect_error([&] { lilt::Engine::transcribe_file(missing, filename.string()); }, "Wrong sample rate rejected");
+    expect_error([&] { engine.transcribe_file(missing, filename.string()); }, "Wrong sample rate rejected");
     write(filename, wav(1, 16000, 2));
-    expect_error([&] { lilt::Engine::transcribe_file(missing, filename.string()); }, "Stereo rejected explicitly");
+    expect_error([&] { engine.transcribe_file(missing, filename.string()); }, "Stereo rejected explicitly");
     write(filename, wav(1, 16000, 1, 8));
-    expect_error([&] { lilt::Engine::transcribe_file(missing, filename.string()); }, "Unsupported sample format rejected");
+    expect_error([&] { engine.transcribe_file(missing, filename.string()); }, "Unsupported sample format rejected");
     auto truncated = wav();
     truncated.resize(truncated.size() - 1);
     write(filename, truncated);
-    expect_error([&] { lilt::Engine::transcribe_file(missing, filename.string()); }, "Truncated data rejected");
+    expect_error([&] { engine.transcribe_file(missing, filename.string()); }, "Truncated data rejected");
     auto malformed = wav();
     malformed[40] = malformed[41] = malformed[42] = malformed[43] = 0xff;
     write(filename, malformed);
-    expect_error([&] { lilt::Engine::transcribe_file(missing, filename.string()); }, "Oversized chunk rejected before allocation");
+    expect_error([&] { engine.transcribe_file(missing, filename.string()); }, "Oversized chunk rejected before allocation");
     write(filename, {'n', 'o', 't', ' ', 'w', 'a', 'v'});
-    expect_error([&] { lilt::Engine::transcribe_file(missing, filename.string()); }, "Short invalid file rejected");
-    expect_error([&] { lilt::Engine::transcribe_file(missing, (directory / "missing.wav").string()); },
+    expect_error([&] { engine.transcribe_file(missing, filename.string()); }, "Short invalid file rejected");
+    expect_error([&] { engine.transcribe_file(missing, (directory / "missing.wav").string()); },
                  "Missing WAV rejected");
+    expect(!engine.busy(), "WAV read errors release the replay operation");
+    expect(engine.transcribe(missing, {}).empty(), "A failed file read does not strand later replay");
 }
 
 // A listening socket that never completes PulseAudio authentication exercises
@@ -243,10 +245,12 @@ void lifecycle_tests(const std::filesystem::path& directory) {
     {
         lilt::Engine engine;
         for (int i = 0; i < 2; ++i) {
-            expect(engine.start(model, "en", 1, callbacks), "New session starts after cancel");
+            expect(engine.start(model, 1, callbacks), "New session starts after cancel");
             std::this_thread::sleep_for(50ms);
             expect(engine.busy(), "Stalled audio setup remains cancellable");
-            expect(!engine.start(model, "en", 1, callbacks), "Overlapping session rejected");
+            expect(!engine.start(model, 1, callbacks), "Overlapping session rejected");
+            expect_error([&] { engine.transcribe(model, {}); }, "Replay rejects capture overlap");
+            engine.release_model(); // Clearing a cache must not wait for capture.
             engine.cancel();
             wait_until([&] { return !engine.busy(); }, 1s,
                        "Cancel must not wait on a stalled audio server");
@@ -256,21 +260,96 @@ void lifecycle_tests(const std::filesystem::path& directory) {
     expect(std::chrono::steady_clock::now() - started < 2s, "Repeated capture cancellation is bounded");
     {
         lilt::Engine engine;
-        expect(engine.start(model, "en", 1, callbacks), "Destructor test starts");
+        expect(engine.start(model, 1, callbacks), "Destructor test starts");
         std::this_thread::sleep_for(50ms);
     } // Destruction cancels and joins a stalled capture.
     expect(std::chrono::steady_clock::now() - started < 3s, "Destruction must release the worker promptly");
 }
 
+// Optional integration with caller-supplied weights/audio; the normal test never
+// downloads a model. Removing a temporary symlink distinguishes weight reuse
+// from reloading without adding observability knobs to the production engine.
+void model_tests(const std::filesystem::path& directory, const char* model, const char* audio) {
+    struct Logs {
+        std::atomic<int> loads{0}, states{0};
+        Logs() {
+            whisper_log_set([](ggml_log_level, const char* text, void* data) {
+                auto& logs = *static_cast<Logs*>(data);
+                if (std::strstr(text, "whisper_model_load: loading model")) ++logs.loads;
+                if (std::strstr(text, "whisper_init_state: compute buffer (decode)")) ++logs.states;
+            }, this);
+        }
+        ~Logs() { whisper_log_set(nullptr, nullptr); }
+    } logs;
+    const auto rss_kib = [] {
+        std::ifstream status("/proc/self/statm");
+        std::size_t total = 0, resident = 0;
+        status >> total >> resident;
+        return resident * static_cast<std::size_t>(sysconf(_SC_PAGESIZE)) / 1024;
+    };
+    const auto link = directory / "selected-model.bin";
+    const auto restore = [&] { std::filesystem::create_symlink(std::filesystem::absolute(model), link); };
+    restore();
+    lilt::Engine engine;
+    const auto baseline_rss = rss_kib();
+    const auto cold = engine.transcribe_file(link.string(), audio, 4);
+    expect(!cold.empty() && logs.loads == 1 && logs.states == 1, "Cold replay loads weights and one state");
+    std::filesystem::remove(link);
+    const auto warm = engine.transcribe_file(link.string(), audio, 4);
+    expect(warm == cold && logs.loads == 1 && logs.states == 2,
+           "Warm replay reuses weights with a fresh, independent decoder state");
+    const auto warm_rss = rss_kib();
+    engine.release_model();
+    const auto cleared_rss = rss_kib();
+    expect_error([&] { engine.transcribe_file(link.string(), audio, 4); }, "Explicit release drops weights");
+
+    restore();
+    engine.transcribe_file(link.string(), audio, 4);
+    engine.transcribe((directory / "another-model.bin").string(), {});
+    std::filesystem::remove(link);
+    expect_error([&] { engine.transcribe_file(link.string(), audio, 4); },
+                 "Changing the selected model releases previous weights even for silence");
+
+    restore();
+    const auto states = logs.states.load();
+    auto replay = std::async(std::launch::async, [&] {
+        return engine.transcribe_file(link.string(), audio, 4, std::string(1400, 'x'));
+    });
+    wait_until([&] { return logs.states > states; }, 15s, "Replay initializes a fresh state");
+    expect(!engine.start(link.string(), 4, {}), "Capture rejects replay overlap");
+    expect_error([&] { engine.transcribe(link.string(), {}); }, "A second replay is rejected");
+    engine.release_model(); // The active decoder keeps its weights safely.
+    engine.cancel();
+    expect(replay.wait_for(10s) == std::future_status::ready && replay.get().empty(),
+           "Replay cancellation suppresses output and releases its state");
+    expect(!engine.busy(), "Cancelled replay returns to idle");
+    std::filesystem::remove(link);
+    expect_error([&] { engine.transcribe_file(link.string(), audio, 4); },
+                 "Clearing during decode must not repopulate the cache");
+
+    restore();
+    engine.transcribe_file(link.string(), audio, 4, "Lilt, PipeWire, Codex.");
+    std::filesystem::remove(link);
+    std::cout << "Real-model reuse, fresh states, release, replacement, overlap and cancel passed. "
+              << "RSS KiB baseline=" << baseline_rss << " warm=" << warm_rss
+              << " cleared=" << cleared_rss << "; checking 60-second expiry..." << std::endl;
+    std::this_thread::sleep_for(61s);
+    const auto expired_rss = rss_kib();
+    expect_error([&] { engine.transcribe_file(link.string(), audio, 4); }, "Idle cache expires after 60 seconds");
+    std::cout << "Idle expiry passed; RSS KiB expired=" << expired_rss << ".\n";
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
+        if (argc != 1 && argc != 3) throw std::runtime_error("Usage: engine_test [MODEL WAV]");
         TemporaryDirectory directory;
         text_tests();
         preview_tests();
         audio_tests(directory.path);
         lifecycle_tests(directory.path);
+        if (argc == 3) model_tests(directory.path, argv[1], argv[2]);
         std::cout << "Text safety, preview boundaries/coalescing, WAV validation, silence gating, and capture cancellation passed.\n";
         return 0;
     } catch (const std::exception& error) {

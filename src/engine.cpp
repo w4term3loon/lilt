@@ -11,6 +11,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -62,35 +63,139 @@ bool audible(const std::vector<float>& samples) {
     return samples.size() >= sample_rate / 10 && active_frames >= 3;
 }
 
-using WhisperContext = std::unique_ptr<whisper_context, decltype(&whisper_free)>;
+using WhisperContext = std::shared_ptr<whisper_context>;
+using WhisperState = std::unique_ptr<whisper_state, decltype(&whisper_free_state)>;
 
-WhisperContext load_model(const std::string& model_path, const std::string& language) {
-    if (!language.empty() && language != "auto" && whisper_lang_id(language.c_str()) < 0)
-        throw std::runtime_error("Unknown transcription language: " + language);
+WhisperContext load_model(const std::string& model_path) {
     if (!std::ifstream(model_path, std::ios::binary))
         throw std::runtime_error("Cannot open the model. Choose a downloaded whisper.cpp model in Settings.");
 
     auto context_params = whisper_context_default_params();
     context_params.use_gpu = false;
     WhisperContext context(
-        whisper_init_from_file_with_params(model_path.c_str(), context_params), whisper_free);
+        whisper_init_from_file_with_params_no_state(model_path.c_str(), context_params), whisper_free);
     if (!context) throw std::runtime_error("Cannot load the model. Check that the download is complete.");
-
-    const bool multilingual = whisper_is_multilingual(context.get());
-    if (!multilingual && !language.empty() && language != "auto" && language != "en" && language != "english")
-        throw std::runtime_error("This model supports English only. Select a multilingual model for other languages.");
     return context;
 }
 
-std::string decode_samples(whisper_context* context, const std::vector<float>& samples,
-                            const std::string& language, int threads, std::atomic<bool>* cancel) {
+// The cache contains weights only. Session-owned shared references keep an
+// active decoder safe while Settings clears the selected model. The sleeping
+// expiry thread never sees audio, prompt tokens, callbacks, or decoder state.
+class ModelCache {
+public:
+    ModelCache() : expiry_([this] { expire(); }) {}
+    ~ModelCache() {
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            exiting_ = true;
+        }
+        changed_.notify_all();
+        expiry_.join();
+    }
+
+    std::size_t begin(const std::string& path) {
+        WhisperContext previous;
+        std::size_t generation;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            active_ = true;
+            if (path_ != path) {
+                previous = std::move(model_);
+                path_ = path;
+                ++generation_;
+            }
+            generation = generation_;
+        }
+        changed_.notify_all();
+        return generation;
+    }
+
+    WhisperContext acquire(const std::string& path, std::size_t generation) {
+        std::unique_lock<std::mutex> guard(mutex_);
+        if (generation == generation_ && model_) return model_;
+        guard.unlock();
+        auto loaded = load_model(path); // Never hold the cache lock during loading.
+        guard.lock();
+        if (generation == generation_) model_ = loaded;
+        return loaded;
+    }
+
+    void idle() {
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            active_ = false;
+            deadline_ = Clock::now() + 60s;
+        }
+        changed_.notify_all();
+    }
+
+    void clear() {
+        WhisperContext previous;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            ++generation_; // A pending load must not repopulate a cleared cache.
+            previous = std::move(model_);
+            path_.clear();
+        }
+        changed_.notify_all();
+    }
+
+private:
+    void expire() {
+        std::unique_lock<std::mutex> guard(mutex_);
+        while (!exiting_) {
+            changed_.wait(guard, [this] { return exiting_ || (model_ && !active_); });
+            if (exiting_) break;
+            const auto deadline = deadline_;
+            if (changed_.wait_until(guard, deadline, [this, deadline] {
+                return exiting_ || active_ || !model_ || deadline_ != deadline;
+            })) continue;
+            auto expired = std::move(model_);
+            path_.clear();
+            guard.unlock();
+            expired.reset();
+            guard.lock();
+        }
+    }
+
+    std::mutex mutex_;
+    std::condition_variable changed_;
+    WhisperContext model_;
+    std::string path_;
+    Clock::time_point deadline_{};
+    std::size_t generation_ = 0;
+    bool active_ = false, exiting_ = false;
+    std::thread expiry_;
+};
+
+struct DecoderContext {
+    // Destruction order matters: state is released before its model reference.
+    WhisperContext model;
+    WhisperState state{nullptr, whisper_free_state};
+    std::vector<whisper_token> prompt;
+
+    DecoderContext(WhisperContext weights, const std::string& vocabulary)
+        : model(std::move(weights)), state(whisper_init_state(model.get()), whisper_free_state) {
+        if (!state) throw std::runtime_error("Cannot initialize the transcription decoder.");
+        // Normalization also removes a truncated final UTF-8 sequence safely.
+        const auto hint = normalize_dictation(vocabulary.substr(0, 1024));
+        if (!hint.empty()) {
+            prompt.resize(1024); // Byte-pair tokenization cannot exceed the byte bound.
+            const int count = whisper_tokenize(model.get(), hint.c_str(), prompt.data(), prompt.size());
+            if (count < 0) throw std::runtime_error("The vocabulary hint could not be prepared.");
+            prompt.resize(std::min(count, 128));
+        }
+    }
+};
+
+std::string decode_samples(DecoderContext& decoder, const std::vector<float>& samples,
+                            int threads, std::atomic<bool>* cancel) {
     if (interrupted(cancel)) return {};
-    const bool multilingual = whisper_is_multilingual(context);
 
     auto params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     const int available = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
     params.n_threads = threads > 0 ? std::clamp(threads, 1, available) : std::clamp(available / 2, 1, 8);
-    params.language = multilingual ? (language.empty() ? "auto" : language.c_str()) : "en";
+    params.language = "en";
     params.translate = false;
     params.no_context = true;
     params.no_timestamps = true;
@@ -101,6 +206,8 @@ std::string decode_samples(whisper_context* context, const std::vector<float>& s
     params.suppress_blank = true;
     params.suppress_nst = true;
     params.greedy.best_of = 1;
+    params.prompt_tokens = decoder.prompt.empty() ? nullptr : decoder.prompt.data();
+    params.prompt_n_tokens = static_cast<int>(decoder.prompt.size());
     params.abort_callback = [](void* data) { return interrupted(static_cast<std::atomic<bool>*>(data)); };
     params.abort_callback_user_data = cancel;
     params.encoder_begin_callback = [](whisper_context*, whisper_state*, void* data) {
@@ -119,32 +226,26 @@ std::string decode_samples(whisper_context* context, const std::vector<float>& s
         audio = padded.data();
         count = padded.size();
     }
-    const int result = whisper_full(context, params, audio, static_cast<int>(count));
+    const int result = whisper_full_with_state(decoder.model.get(), decoder.state.get(), params,
+                                               audio, static_cast<int>(count));
     if (interrupted(cancel)) return {};
     if (result != 0) throw std::runtime_error("Local transcription failed. Try a shorter recording or another model.");
 
     std::string text;
-    for (int i = 0; i < whisper_full_n_segments(context); ++i) {
-        if (whisper_full_get_segment_no_speech_prob(context, i) > 0.6f) continue;
-        if (const char* segment = whisper_full_get_segment_text(context, i)) text += segment;
+    for (int i = 0; i < whisper_full_n_segments_from_state(decoder.state.get()); ++i) {
+        if (whisper_full_get_segment_no_speech_prob_from_state(decoder.state.get(), i) > 0.6f) continue;
+        if (const char* segment = whisper_full_get_segment_text_from_state(decoder.state.get(), i)) text += segment;
     }
     return normalize_dictation(text);
 }
 
-std::string transcribe_samples(const std::string& model_path,
-                               const std::vector<float>& samples,
-                               const std::string& language, int threads,
-                               std::atomic<bool>* cancel) {
-    if (interrupted(cancel) || !audible(samples)) return {};
-    auto context = load_model(model_path, language);
-    return decode_samples(context.get(), samples, language, threads, cancel);
-}
-
 class SessionDecoder {
 public:
-    SessionDecoder(std::string model_path, std::string language, int threads,
+    SessionDecoder(ModelCache& cache, std::size_t generation, std::string model_path,
+                   std::string vocabulary, int threads,
                    std::atomic<bool>& cancel, const Engine::Callbacks& callbacks, bool live_preview)
-        : model_path_(std::move(model_path)), language_(std::move(language)), threads_(threads),
+        : cache_(cache), generation_(generation), model_path_(std::move(model_path)),
+          vocabulary_(std::move(vocabulary)), threads_(threads),
           cancel_(cancel), on_partial_(callbacks.on_partial), preview_(live_preview && bool(on_partial_)) {}
 
     ~SessionDecoder() {
@@ -157,7 +258,9 @@ public:
 
     void start() {
         task_ = std::async(std::launch::async, [this] {
-            auto context = load_model(model_path_, language_);
+            auto model = cache_.acquire(model_path_, generation_);
+            if (cancel_) return std::unique_ptr<DecoderContext>{};
+            auto context = std::make_unique<DecoderContext>(std::move(model), vocabulary_);
             if (preview_) {
                 std::string previous;
                 auto next_decode = Clock::now();
@@ -165,7 +268,7 @@ public:
                     if (partial_stop_ || cancel_) break;
                     if (!audible(*samples)) continue;
                     next_decode = Clock::now() + 2s;
-                    auto text = decode_samples(context.get(), *samples, language_, threads_, &partial_stop_);
+                    auto text = decode_samples(*context, *samples, threads_, &partial_stop_);
                     if (partial_stop_ || cancel_) break;
                     const auto stable = detail::stable_word_prefix(previous, text);
                     previous = text;
@@ -190,22 +293,24 @@ public:
         pending_.close();
     }
 
-    WhisperContext take_context() {
+    std::unique_ptr<DecoderContext> take_context() {
         finish();
         if (task_.valid()) context_ = task_.get();
         return std::move(context_);
     }
 
 private:
-    const std::string model_path_, language_;
+    ModelCache& cache_;
+    const std::size_t generation_;
+    const std::string model_path_, vocabulary_;
     const int threads_;
     std::atomic<bool>& cancel_;
     const std::function<void(std::string, std::size_t)> on_partial_;
     const bool preview_;
     std::atomic<bool> partial_stop_{false};
     detail::LatestValue<std::vector<float>> pending_;
-    WhisperContext context_{nullptr, whisper_free};
-    std::future<WhisperContext> task_;
+    std::unique_ptr<DecoderContext> context_;
+    std::future<std::unique_ptr<DecoderContext>> task_;
 };
 
 struct PulseCapture {
@@ -420,10 +525,12 @@ std::vector<float> read_wav(const std::string& path) {
 
 struct Engine::Impl {
     std::mutex lifecycle;
+    ModelCache cache;
     std::thread worker;
     std::atomic<bool> running{false};
     std::atomic<bool> stop_requested{false};
     std::atomic<bool> cancel_requested{false};
+    std::size_t model_generation = 0;
 
     ~Impl() {
         cancel_requested = true;
@@ -431,21 +538,38 @@ struct Engine::Impl {
         if (worker.joinable()) worker.join();
     }
 
-    void run(const std::string& model_path, const std::string& language,
-             int threads, const Callbacks& callbacks, bool live_preview) noexcept {
+    // Caller holds lifecycle while claiming an operation / replacing worker.
+    bool begin(const std::string& model_path) {
+        if (running) return false;
+        if (worker.joinable()) {
+            if (worker.get_id() == std::this_thread::get_id()) return false;
+            worker.join();
+        }
+        stop_requested = false;
+        cancel_requested = false;
+        model_generation = cache.begin(model_path);
+        running = true;
+        return true;
+    }
+
+    void run(const std::string& model_path, int threads, const Callbacks& callbacks,
+             bool live_preview, const std::string& vocabulary) noexcept {
         std::string terminal_state = "idle";
         std::string message;
         try {
             if (!std::ifstream(model_path, std::ios::binary))
                 throw std::runtime_error("Choose a downloaded whisper.cpp model in Settings before recording.");
-            SessionDecoder decoder(model_path, language, threads, cancel_requested, callbacks, live_preview);
+            SessionDecoder decoder(cache, model_generation, model_path, vocabulary, threads,
+                                   cancel_requested, callbacks, live_preview);
             auto samples = capture_audio(stop_requested, cancel_requested, callbacks, decoder);
             decoder.finish();
             if (!cancel_requested && audible(samples)) {
                 notify(callbacks.on_state, "transcribing", "Transcribing");
                 auto context = decoder.take_context();
                 if (!context) throw std::runtime_error("The transcription model was not initialized.");
-                auto text = decode_samples(context.get(), samples, language, threads, &cancel_requested);
+                // take_context() joins the partial worker before final decoding.
+                // begin() excludes any other recording/replay on these weights.
+                auto text = decode_samples(*context, samples, threads, &cancel_requested);
                 if (!cancel_requested && !text.empty()) notify(callbacks.on_result, std::move(text));
                 else if (!cancel_requested) message = "No speech detected";
             } else if (!cancel_requested) {
@@ -463,30 +587,60 @@ struct Engine::Impl {
             message = "Unexpected audio or transcription error.";
         }
         notify(callbacks.on_level, 0.0);
+        cache.idle(); // All audio, hypotheses, and per-recording states are gone.
         running = false;
         notify(callbacks.on_state, std::move(terminal_state), std::move(message));
+    }
+
+    template<class ReadAudio>
+    std::string replay(const std::string& model_path, int threads,
+                       const std::string& vocabulary, ReadAudio read_audio) {
+        {
+            std::lock_guard<std::mutex> guard(lifecycle);
+            if (!begin(model_path)) throw std::runtime_error("A transcription session is already active.");
+        }
+        std::string text;
+        try {
+            if (!cancel_requested) {
+                // Claim the operation before file I/O, so cancellation during
+                // a slow read is observed rather than reset at decoder start.
+                decltype(auto) samples = read_audio();
+                if (!cancel_requested && audible(samples)) {
+                    auto model = cache.acquire(model_path, model_generation);
+                    if (!cancel_requested) {
+                        DecoderContext context(std::move(model), vocabulary);
+                        text = decode_samples(context, samples, threads, &cancel_requested);
+                    }
+                }
+            }
+        } catch (...) {
+            const bool cancelled = cancel_requested;
+            cache.idle();
+            running = false;
+            if (cancelled) return {};
+            throw;
+        }
+        if (cancel_requested) text.clear();
+        cache.idle();
+        running = false;
+        return text;
     }
 };
 
 Engine::Engine() : impl_(std::make_unique<Impl>()) {}
 Engine::~Engine() = default;
 
-bool Engine::start(const std::string& model_path, const std::string& language,
-                   int threads, Callbacks callbacks, bool live_preview) {
+bool Engine::start(const std::string& model_path, int threads, Callbacks callbacks,
+                   bool live_preview, const std::string& vocabulary) {
     std::lock_guard<std::mutex> guard(impl_->lifecycle);
-    if (impl_->running) return false;
-    if (impl_->worker.joinable()) {
-        if (impl_->worker.get_id() == std::this_thread::get_id()) return false;
-        impl_->worker.join();
-    }
-    impl_->stop_requested = false;
-    impl_->cancel_requested = false;
-    impl_->running = true;
+    if (!impl_->begin(model_path)) return false;
     try {
-        impl_->worker = std::thread([this, model_path, language, threads, callbacks = std::move(callbacks), live_preview] {
-            impl_->run(model_path, language, threads, callbacks, live_preview);
+        impl_->worker = std::thread([this, model_path, threads, callbacks = std::move(callbacks), live_preview,
+                                    vocabulary = normalize_dictation(vocabulary.substr(0, 1024))] {
+            impl_->run(model_path, threads, callbacks, live_preview, vocabulary);
         });
     } catch (...) {
+        impl_->cache.idle();
         impl_->running = false;
         throw;
     }
@@ -499,15 +653,18 @@ void Engine::cancel() {
     impl_->stop_requested = true;
 }
 bool Engine::busy() const noexcept { return impl_->running; }
+void Engine::release_model() { impl_->cache.clear(); }
 
 std::string Engine::transcribe(const std::string& model_path, const std::vector<float>& samples,
-                               const std::string& language, int threads) {
-    return transcribe_samples(model_path, samples, language, threads, nullptr);
+                               int threads, const std::string& vocabulary) {
+    return impl_->replay(model_path, threads, vocabulary, [&samples]() -> const std::vector<float>& {
+        return samples;
+    });
 }
 
 std::string Engine::transcribe_file(const std::string& model_path, const std::string& wav_path,
-                                    const std::string& language, int threads) {
-    return transcribe(model_path, read_wav(wav_path), language, threads);
+                                    int threads, const std::string& vocabulary) {
+    return impl_->replay(model_path, threads, vocabulary, [&wav_path] { return read_wav(wav_path); });
 }
 
 } // namespace lilt

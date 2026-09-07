@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0
+
+- Reuse model weights for 60 seconds, with fresh decoder state per recording.
+  Release weights on expiry, model changes, and exit.
+- Add optional local vocabulary hints without training or another UI control.
+- Make the offline transcription command English-only, matching the app.
+- Shorten the documentation, remove the README image and redundant extension
+  guide, and share the model list between settings validation and preferences.
+
 ## 0.5.1
 
 - Reject IBus's unfocused fallback context before starting live dictation.

@@ -3,7 +3,9 @@
 #include "migration.hpp"
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <stdexcept>
 #include <thread>
 #include <unistd.h>
 #include <csignal>
@@ -42,6 +44,10 @@ void NativeApplication::unregister_bus(GApplication* application, GDBusConnectio
 namespace {
 constexpr auto kPath = "/io/github/lilt/Dictation";
 constexpr auto kInterface = "io.github.lilt.Dictation";
+constexpr struct { const char* id; const char* title; } kModels[] = {
+    {"tiny.en-q5_1", "Tiny"}, {"base.en-q5_1", "Base"},
+    {"small.en-q5_1", "Small"}, {"medium.en-q5_0", "Medium"},
+};
 constexpr auto kXml = R"(<node><interface name="io.github.lilt.Dictation">
 <method name="Toggle"/><method name="Stop"/><method name="Cancel"/>
 <method name="ShowPreferences"/><method name="Quit"/><method name="Attach"/><method name="Detach"/>
@@ -54,6 +60,23 @@ constexpr auto kXml = R"(<node><interface name="io.github.lilt.Dictation">
 <signal name="Transcript"><arg type="s" name="text"/></signal>
 </interface></node>)";
 std::string take(gchar* s) { std::string out = s ? s : ""; g_free(s); return out; }
+std::string read_vocabulary() {
+    const auto path = std::filesystem::path(g_get_user_config_dir()) / "lilt/vocabulary.txt";
+    std::error_code error;
+    const auto status = std::filesystem::status(path, error);
+    if (error == std::errc::no_such_file_or_directory) return {};
+    if (error || !std::filesystem::is_regular_file(status))
+        throw std::runtime_error("Could not read vocabulary.txt.");
+    std::ifstream file(path, std::ios::binary);
+    std::string text(1025, '\0');
+    if (!file) throw std::runtime_error("Could not read vocabulary.txt.");
+    file.read(text.data(), text.size());
+    text.resize(file.gcount());
+    if (file.bad()) throw std::runtime_error("Could not read vocabulary.txt.");
+    if (text.size() > 1024 || !g_utf8_validate(text.data(), text.size(), nullptr))
+        throw std::runtime_error("Keep vocabulary.txt to 1024 bytes of UTF-8 text.");
+    return text;
+}
 bool modifier_key(guint key) {
     switch (key) {
     case GDK_KEY_Shift_L: case GDK_KEY_Shift_R:
@@ -234,7 +257,10 @@ void App::toggle() {
         });
     };
     set_state("loading", "Opening microphone…");
-    try { engine_.start(model_path(), "en", std::max(1u, std::min(4u, std::thread::hardware_concurrency())), std::move(cb), live_preview_); } catch (const std::exception& error) { set_state("error", error.what()); }
+    try {
+        engine_.start(model_path(), std::max(1u, std::min(4u, std::thread::hardware_concurrency())),
+                      std::move(cb), live_preview_, read_vocabulary());
+    } catch (const std::exception& error) { set_state("error", error.what()); }
 }
 
 void App::cancel_session() {
@@ -324,8 +350,8 @@ void App::load_config() {
     const std::string legacy[] = {"tiny-q5_1", "base-q5_1", "small-q5_1", "medium-q5_0"};
     if (std::find(std::begin(legacy), std::end(legacy), model_) != std::end(legacy))
         model_.insert(model_.find('-'), ".en");
-    const std::string allowed[] = {"tiny.en-q5_1", "base.en-q5_1", "small.en-q5_1", "medium.en-q5_0"};
-    if (std::find(std::begin(allowed), std::end(allowed), model_) == std::end(allowed)) model_ = "small.en-q5_1";
+    if (std::none_of(std::begin(kModels), std::end(kModels),
+        [this](const auto& model) { return model_ == model.id; })) model_ = "small.en-q5_1";
     g_key_file_unref(file);
     if (loaded && (migrate || model_ != previous_model)) save_config();
 }
@@ -414,9 +440,8 @@ void App::build_ui() {
     };
     pack(box, grid);
     model_combo_ = gtk_combo_box_text_new();
-    const char* ids[] = {"tiny.en-q5_1", "base.en-q5_1", "small.en-q5_1", "medium.en-q5_0"};
-    const char* titles[] = {"Tiny", "Base", "Small", "Medium"};
-    for (int i = 0; i < 4; ++i) gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(model_combo_), ids[i], titles[i]);
+    for (const auto& model : kModels)
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(model_combo_), model.id, model.title);
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(model_combo_), model_.c_str());
     GList* cells = gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(model_combo_));
     for (GList* cell = cells; cell; cell = cell->next) g_object_set(cell->data, "xalign", 0.5f, nullptr);
@@ -453,6 +478,8 @@ void App::build_ui() {
     g_signal_connect(model_combo_, "changed", G_CALLBACK(+[](GtkComboBox* w, gpointer d) {
         auto* self = static_cast<App*>(d); if (self->building_ui_) return;
         const char* id = gtk_combo_box_get_active_id(w); if (!id) return;
+        if (self->model_ == id) return;
+        self->engine_.release_model();
         self->model_ = id; self->save_config(); self->refresh();
     }), this);
     building_ui_ = false;
