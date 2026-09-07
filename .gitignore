@@ -1,0 +1,14 @@
+/build/
+/build-*/
+/_build/
+/_build-*/
+/dist/
+/.deps/
+/.cache/
+.DS_Store
+*.pyc
+__pycache__/
+/extension/schemas/gschemas.compiled
+*.deb
+*.bin
+*.part

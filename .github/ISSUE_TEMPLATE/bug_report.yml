@@ -1,0 +1,33 @@
+name: Bug report
+description: Report a reproducible problem with lilt.
+title: "[Bug] "
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Describe the result you expected and what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the destination application and whether Live text was enabled.
+      placeholder: "1. Open …\n2. Start dictation …\n3. …"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: lilt version, Ubuntu version, GNOME Shell version, Wayland or X11, CPU, and model name.
+      placeholder: "lilt: \nUbuntu: \nGNOME Shell: \nSession: \nCPU: \nModel: "
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant errors or logs
+      description: Include only relevant lines. Remove private text, paths, and other personal information before posting; audio is not required.
+      render: text

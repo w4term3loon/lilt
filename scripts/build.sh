@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd -- "$(dirname -- "$0")/.."
+if [[ -x .deps/sysroot/usr/bin/cmake ]]; then
+    lilt_deps="$PWD/.deps/sysroot"
+    export PATH="$lilt_deps/usr/bin:$PATH"
+    export LD_LIBRARY_PATH="$lilt_deps/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export PKG_CONFIG_SYSROOT_DIR="$lilt_deps"
+    export PKG_CONFIG_LIBDIR="$lilt_deps/usr/lib/x86_64-linux-gnu/pkgconfig:$lilt_deps/usr/share/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+fi
+for lilt_tool in cmake ctest pkg-config git c++ make; do
+    command -v "$lilt_tool" >/dev/null || { printf 'Missing build tool: %s\n' "$lilt_tool" >&2; exit 1; }
+done
+# Reset old developer caches to the portable defaults. Explicit arguments after
+# these defaults still allow opt-in local tuning with -DGGML_NATIVE=ON.
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF \
+    -DGGML_SSE42=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_BMI2=OFF \
+    -DGGML_FMA=OFF -DGGML_F16C=OFF "$@"
+cmake --build build -j "${LILT_BUILD_JOBS:-4}"
+ctest --test-dir build --output-on-failure

@@ -1,0 +1,9 @@
+{
+  "uuid": "lilt@local",
+  "name": "lilt",
+  "description": "Local voice dictation: a shortcut, a small recording indicator, and direct text insertion.",
+  "shell-version": ["46"],
+  "settings-schema": "org.gnome.shell.extensions.lilt",
+  "version": 6,
+  "version-name": "0.5.0"
+}

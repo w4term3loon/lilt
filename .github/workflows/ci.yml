@@ -1,0 +1,75 @@
+name: Build and verify
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu-24-04:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends build-essential git cmake pkg-config \
+            libgtk-3-dev libpulse-dev binutils libglib2.0-bin gjs xvfb dbus-x11 \
+            python3 python3-gi gir1.2-gtk-3.0 gir1.2-ibus-1.0
+      - name: Build portable executable and run CTest
+        run: ./scripts/build.sh
+      - name: Validate GNOME schemas and JavaScript regressions
+        run: |
+          glib-compile-schemas --strict --dry-run extension/schemas
+          gjs -m extension/test-text.js
+          gjs extension/tests/test-session.js
+          gjs extension/tests/test-lifecycle.js
+      - name: Compile Python scripts
+        run: python3 -m compileall -q scripts tests extension/tests
+      - name: Prepare and verify local release artifacts
+        run: |
+          python3 scripts/package.py --output dist
+          python3 tests/test_packaging.py --archives dist
+          cd dist
+          sha256sum --check SHA256SUMS
+      - name: Upload reviewable artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lilt-ubuntu-24.04-x86_64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  gnome-46-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [wayland, ibus, x11]
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install isolated desktop test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends gnome-shell ibus gjs dbus-x11 \
+            python3 python3-gi gir1.2-gtk-3.0 gir1.2-ibus-1.0 xwayland libgl1-mesa-dri
+      - name: Verify GNOME 46 input integration
+        run: bash extension/tests/headless-smoke.sh "${{ matrix.mode }}"
+      - name: Preserve failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gnome-46-${{ matrix.mode }}-failure
+          path: |
+            /tmp/lilt-shell-test.*/*.log
+            /tmp/lilt-shell-test.*/*.json
+            /tmp/lilt-shell-test.*/*.png
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,0 +1,17 @@
+name: Feature request
+description: Suggest a focused improvement to lilt.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem should this solve?
+      description: Describe a concrete dictation workflow and its current limitation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the outcome you would find useful and any alternatives you have tried.
+    validations:
+      required: true

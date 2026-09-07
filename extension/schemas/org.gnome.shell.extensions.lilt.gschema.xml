@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.lilt" path="/org/gnome/shell/extensions/lilt/">
+    <key name="toggle-shortcut" type="as">
+      <default>['&lt;Control&gt;&lt;Super&gt;space']</default>
+      <summary>Start or finish dictation</summary>
+      <description>Synchronized with the shortcut in lilt preferences.</description>
+    </key>
+  </schema>
+</schemalist>

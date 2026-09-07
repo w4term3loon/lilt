@@ -1,0 +1,15 @@
+.lilt-pill {
+    background-color: rgba(28, 28, 32, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 19px;
+    padding: 6px 9px;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
+}
+.lilt-wave { spacing: 2px; height: 23px; }
+.lilt-wave-bar {
+    width: 3px;
+    border-radius: 2px;
+    background-color: #f3ebe5;
+}
+.lilt-pill.busy .lilt-wave-bar { background-color: #bcb7ee; }
+.lilt-panel-recording { color: #ff726a; }
