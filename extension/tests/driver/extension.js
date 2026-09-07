@@ -61,21 +61,40 @@ export default class Driver extends Extension {
             .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
         this.later(250, () => this.prepare());
         this.later(400, () => this.snapshot('before-start'));
-        this.later(500, () => this.exercise());
+        this.later(500, () => this.exercise().catch(error => {
+            console.error(`LILT TEST FIXTURE ERROR ${error.message}`);
+        }));
     }
 
-    exercise() {
+    async startRecording() {
         this.toggle();
-        this.later(100, () => this.snapshot('start'));
-        this.later(150, () => {
+        const deadline = GLib.get_monotonic_time() + 5 * 1000000;
+        while (this.lilt._state !== 'recording' || this.lilt._preparing ||
+            !this.lilt._latestPartial?.text) {
+            if (GLib.get_monotonic_time() >= deadline)
+                throw new Error(`Recording did not become ready: state=${this.lilt._state}, preparing=${this.lilt._preparing}, composition=${!!this.lilt._composition}, draft=${!!this.lilt._latestPartial?.text}`);
+            await this.pause(25);
+        }
+    }
+
+    pause(ms) {
+        return new Promise(resolve => this.later(ms, resolve));
+    }
+
+    async exercise() {
+        const steps = [];
+        const step = (at, action) => steps.push([at, action]);
+        await this.startRecording();
+        step(100, () => this.snapshot('start'));
+        step(150, () => {
             this.key(Clutter.KEY_Shift_L, true);
             this.keyboard.notify_key(GLib.get_monotonic_time(), 30, Clutter.KeyState.PRESSED);
             this.key(Clutter.KEY_Shift_L, false);
             this.keyboard.notify_key(GLib.get_monotonic_time(), 30, Clutter.KeyState.RELEASED);
         });
-        this.later(300, () => this.tap(Clutter.KEY_Return));
-        this.later(420, () => this.tap(Clutter.KEY_F8));
-        this.later(600, () => {
+        step(300, () => this.tap(Clutter.KEY_Return));
+        step(420, () => this.tap(Clutter.KEY_F8));
+        step(600, () => {
             console.log(`LILT TEST WRONG KEYS state=${this.lilt._state}`);
             console.log(`LILT TEST INLINE composition=${!!this.lilt._composition} grab=${!!this.lilt._grab}`);
             this.snapshot('draft');
@@ -85,63 +104,72 @@ export default class Driver extends Extension {
                 bar.scale_y === 1 && bar.height >= bar.width && bar.height <= 23);
             console.log(`LILT TEST CAPS unscaled=${rounded}`);
         });
-        this.later(850, () => {
+        step(850, () => {
             this.snapshot('revised');
             console.log(`LILT TEST LEVEL changed=${Math.abs(this.recordingHeight - this.lilt._bars[4].height) > 0.4}`);
         });
-        this.later(900, () => this.key(Clutter.KEY_Control_L, true));
-        this.later(1000, () => this.key(Clutter.KEY_F8, true));
-        this.later(1050, () => { this.dotPositions = this.lilt._dots.map(dot => dot.translation_y); });
-        this.later(1150, () => {
+        step(900, () => this.key(Clutter.KEY_Control_L, true));
+        step(1000, () => this.key(Clutter.KEY_F8, true));
+        step(1050, () => { this.dotPositions = this.lilt._dots.map(dot => dot.translation_y); });
+        step(1150, () => {
             this.capture('transcribing');
             const changed = this.lilt._dots.some((dot, index) =>
                 Math.abs(dot.translation_y - this.dotPositions[index]) > 0.2);
             console.log(`LILT TEST DOTS visible=${this.lilt._dotBox.visible} wave=${this.lilt._wave.visible} count=${this.lilt._dots.length} moving=${changed}`);
         });
-        this.later(1700, () => { this.logHeld('HELD'); this.snapshot('held'); });
-        this.later(1900, () => this.key(Clutter.KEY_F8, false));
-        this.later(2050, () => { this.logHeld('MODIFIER'); this.snapshot('modifier'); });
-        this.later(2200, () => this.key(Clutter.KEY_Control_L, false));
-        this.later(2600, () => { this.logFinished('FINISHED'); this.snapshot('final'); });
+        step(1700, () => { this.logHeld('HELD'); this.snapshot('held'); });
+        step(1900, () => this.key(Clutter.KEY_F8, false));
+        step(2050, () => { this.logHeld('MODIFIER'); this.snapshot('modifier'); });
+        step(2200, () => this.key(Clutter.KEY_Control_L, false));
+        step(2600, () => { this.logFinished('FINISHED'); this.snapshot('final'); });
 
-        this.later(2800, () => this.prepare());
-        this.later(3000, () => this.toggle());
-        this.later(3300, () => this.toggleDown());
-        this.later(3900, () => { this.logHeld('TOGGLE HELD'); this.snapshot('toggle-held'); });
-        this.later(4100, () => this.toggleUp());
-        this.later(4500, () => { this.logFinished('TOGGLE FINISHED'); this.snapshot('toggle-final'); });
+        step(2800, () => this.prepare());
+        step(3000, () => this.startRecording());
+        step(3300, () => this.toggleDown());
+        step(3900, () => { this.logHeld('TOGGLE HELD'); this.snapshot('toggle-held'); });
+        step(4100, () => this.toggleUp());
+        step(4500, () => { this.logFinished('TOGGLE FINISHED'); this.snapshot('toggle-final'); });
 
-        this.later(4700, () => this.prepare());
-        this.later(4900, () => this.toggle());
-        this.later(5300, () => this.key(Clutter.KEY_Escape, true));
-        this.later(5650, () => this.key(Clutter.KEY_Escape, false));
-        this.later(6000, () => { this.logFinished('CANCELED'); this.snapshot('cancel'); });
+        step(4700, () => this.prepare());
+        step(4900, () => this.startRecording());
+        step(5300, () => this.key(Clutter.KEY_Escape, true));
+        step(5650, () => this.key(Clutter.KEY_Escape, false));
+        step(6000, () => { this.logFinished('CANCELED'); this.snapshot('cancel'); });
 
-        this.later(6200, () => {
+        step(6200, () => {
             this.prepare();
             this.fixture('FinishShortcut', '(s)', ['Return']);
         });
-        this.later(6400, () => this.toggle());
-        this.later(6800, () => this.key(Clutter.KEY_Return, true));
-        this.later(7900, () => this.snapshot('enter-held'));
-        this.later(8200, () => this.key(Clutter.KEY_Return, false));
-        this.later(8500, () => this.snapshot('enter-final'));
+        step(6400, () => this.startRecording());
+        step(6800, () => this.key(Clutter.KEY_Return, true));
+        step(7900, () => this.snapshot('enter-held'));
+        step(8200, () => this.key(Clutter.KEY_Return, false));
+        step(8500, () => this.snapshot('enter-final'));
 
-        this.later(8800, () => this.prepare());
-        this.later(9000, () => this.toggle());
-        this.later(9400, () => this.focus('lilt other entry'));
-        this.later(9800, () => this.snapshot('focus-lost'));
+        step(8800, () => this.prepare());
+        step(9000, () => this.startRecording());
+        step(9400, () => this.focus('lilt other entry'));
+        step(9800, () => this.snapshot('focus-lost'));
 
-        this.later(10100, () => this.focus('lilt test entry'));
-        this.later(10300, () => this.prepare());
-        this.later(10500, () => this.toggle());
-        this.later(10900, () => this.fixture('SwitchEngine', '(s)', ['xkb:gb::eng']));
-        this.later(11400, () => this.snapshot('engine-change'));
-        this.later(11600, () => this.fixture('SwitchEngine', '(s)', ['xkb:us::eng']));
-        this.later(11900, () => this.prepare());
-        this.later(12100, () => this.toggle());
-        this.later(12500, () => this.fixture('Close'));
-        this.later(13000, () => this.snapshot('target-closed'));
+        step(10100, () => this.focus('lilt test entry'));
+        step(10300, () => this.prepare());
+        step(10500, () => this.startRecording());
+        step(10900, () => this.fixture('SwitchEngine', '(s)', ['xkb:gb::eng']));
+        step(11400, () => this.snapshot('engine-change'));
+        step(11600, () => this.fixture('SwitchEngine', '(s)', ['xkb:us::eng']));
+        step(11900, () => this.prepare());
+        step(12100, () => this.startRecording());
+        step(12500, () => this.fixture('Close'));
+        step(13000, () => this.snapshot('target-closed'));
+
+        // A cold IBus activation must not consume the timed key-test window.
+        // Keep each scenario's original delays, pausing at every recording start.
+        let previous = 0;
+        for (const [at, action] of steps) {
+            await this.pause(at - previous);
+            await action();
+            previous = at;
+        }
     }
 
     logHeld(label) {

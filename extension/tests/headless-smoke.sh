@@ -114,8 +114,8 @@ else:
 os.execve('/usr/bin/python3', ['python3', env['LILT_EXTENSION_DIR'] + '/tests/entry.py'], env)
 PY
 lilt_entry_pid=$!
-# Shell startup varies; finish only after the final fixture reply is written.
-for lilt_attempt in {1..150}; do
+# Allow the timed scenarios plus seven bounded five-second IBus handovers.
+for lilt_attempt in {1..300}; do
     [[ ! -f "$LILT_SMOKE_ROOT/complete" ]] || break
     sleep 0.2
 done
