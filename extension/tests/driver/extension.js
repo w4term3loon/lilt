@@ -10,6 +10,10 @@ export default class Driver extends Extension {
         this.timers = new Set();
         this.frames = {};
         this.recordings = 0;
+        // GTK must discover a keyboard-capable Wayland seat when it connects.
+        // A headless CI compositor can have no physical input devices at all.
+        this.keyboard = Clutter.get_default_backend().get_default_seat()
+            .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
         GLib.file_set_contents(GLib.build_filenamev([GLib.getenv('LILT_SMOKE_ROOT'), 'display.json']),
             JSON.stringify({DISPLAY: GLib.getenv('DISPLAY'), XAUTHORITY: GLib.getenv('XAUTHORITY')}));
         this.later(3500, () => this.run());
@@ -73,8 +77,6 @@ export default class Driver extends Extension {
             return result;
         };
         this.lilt._capture = this.captureProbe;
-        this.keyboard = Clutter.get_default_backend().get_default_seat()
-            .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
         this.later(250, () => this.prepare());
         this.later(400, () => {
             this.logRoute('before-start');
