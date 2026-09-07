@@ -5,6 +5,7 @@
 
 #include <pulse/pulseaudio.h>
 #include <whisper.h>
+#include <malloc.h>
 
 #include <algorithm>
 #include <array>
@@ -66,6 +67,11 @@ bool audible(const std::vector<float>& samples) {
 using WhisperContext = std::shared_ptr<whisper_context>;
 using WhisperState = std::unique_ptr<whisper_state, decltype(&whisper_free_state)>;
 
+void free_model(whisper_context* context) {
+    whisper_free(context);
+    malloc_trim(0);
+}
+
 WhisperContext load_model(const std::string& model_path) {
     if (!std::ifstream(model_path, std::ios::binary))
         throw std::runtime_error("Cannot open the model. Choose a downloaded whisper.cpp model in Settings.");
@@ -73,14 +79,14 @@ WhisperContext load_model(const std::string& model_path) {
     auto context_params = whisper_context_default_params();
     context_params.use_gpu = false;
     WhisperContext context(
-        whisper_init_from_file_with_params_no_state(model_path.c_str(), context_params), whisper_free);
+        whisper_init_from_file_with_params_no_state(model_path.c_str(), context_params), free_model);
     if (!context) throw std::runtime_error("Cannot load the model. Check that the download is complete.");
     return context;
 }
 
 // The cache contains weights only. Session-owned shared references keep an
 // active decoder safe while Settings clears the selected model. The sleeping
-// expiry thread never sees audio, prompt tokens, callbacks, or decoder state.
+// expiry thread never sees audio, callbacks, or decoder state.
 class ModelCache {
 public:
     ModelCache() : expiry_([this] { expire(); }) {}
@@ -121,6 +127,9 @@ public:
     }
 
     void idle() {
+        // Session state/audio are gone. Return free pages held by worker-thread
+        // malloc arenas, while retaining the selected model's live weights.
+        malloc_trim(0);
         {
             std::lock_guard<std::mutex> guard(mutex_);
             active_ = false;
@@ -172,19 +181,9 @@ struct DecoderContext {
     // Destruction order matters: state is released before its model reference.
     WhisperContext model;
     WhisperState state{nullptr, whisper_free_state};
-    std::vector<whisper_token> prompt;
-
-    DecoderContext(WhisperContext weights, const std::string& vocabulary)
+    explicit DecoderContext(WhisperContext weights)
         : model(std::move(weights)), state(whisper_init_state(model.get()), whisper_free_state) {
         if (!state) throw std::runtime_error("Cannot initialize the transcription decoder.");
-        // Normalization also removes a truncated final UTF-8 sequence safely.
-        const auto hint = normalize_dictation(vocabulary.substr(0, 1024));
-        if (!hint.empty()) {
-            prompt.resize(1024); // Byte-pair tokenization cannot exceed the byte bound.
-            const int count = whisper_tokenize(model.get(), hint.c_str(), prompt.data(), prompt.size());
-            if (count < 0) throw std::runtime_error("The vocabulary hint could not be prepared.");
-            prompt.resize(std::min(count, 128));
-        }
     }
 };
 
@@ -206,8 +205,6 @@ std::string decode_samples(DecoderContext& decoder, const std::vector<float>& sa
     params.suppress_blank = true;
     params.suppress_nst = true;
     params.greedy.best_of = 1;
-    params.prompt_tokens = decoder.prompt.empty() ? nullptr : decoder.prompt.data();
-    params.prompt_n_tokens = static_cast<int>(decoder.prompt.size());
     params.abort_callback = [](void* data) { return interrupted(static_cast<std::atomic<bool>*>(data)); };
     params.abort_callback_user_data = cancel;
     params.encoder_begin_callback = [](whisper_context*, whisper_state*, void* data) {
@@ -241,11 +238,9 @@ std::string decode_samples(DecoderContext& decoder, const std::vector<float>& sa
 
 class SessionDecoder {
 public:
-    SessionDecoder(ModelCache& cache, std::size_t generation, std::string model_path,
-                   std::string vocabulary, int threads,
+    SessionDecoder(ModelCache& cache, std::size_t generation, std::string model_path, int threads,
                    std::atomic<bool>& cancel, const Engine::Callbacks& callbacks, bool live_preview)
-        : cache_(cache), generation_(generation), model_path_(std::move(model_path)),
-          vocabulary_(std::move(vocabulary)), threads_(threads),
+        : cache_(cache), generation_(generation), model_path_(std::move(model_path)), threads_(threads),
           cancel_(cancel), on_partial_(callbacks.on_partial), preview_(live_preview && bool(on_partial_)) {}
 
     ~SessionDecoder() {
@@ -260,7 +255,7 @@ public:
         task_ = std::async(std::launch::async, [this] {
             auto model = cache_.acquire(model_path_, generation_);
             if (cancel_) return std::unique_ptr<DecoderContext>{};
-            auto context = std::make_unique<DecoderContext>(std::move(model), vocabulary_);
+            auto context = std::make_unique<DecoderContext>(std::move(model));
             if (preview_) {
                 std::string previous;
                 auto next_decode = Clock::now();
@@ -302,7 +297,7 @@ public:
 private:
     ModelCache& cache_;
     const std::size_t generation_;
-    const std::string model_path_, vocabulary_;
+    const std::string model_path_;
     const int threads_;
     std::atomic<bool>& cancel_;
     const std::function<void(std::string, std::size_t)> on_partial_;
@@ -553,13 +548,13 @@ struct Engine::Impl {
     }
 
     void run(const std::string& model_path, int threads, const Callbacks& callbacks,
-             bool live_preview, const std::string& vocabulary) noexcept {
+             bool live_preview) noexcept {
         std::string terminal_state = "idle";
         std::string message;
         try {
             if (!std::ifstream(model_path, std::ios::binary))
                 throw std::runtime_error("Choose a downloaded whisper.cpp model in Settings before recording.");
-            SessionDecoder decoder(cache, model_generation, model_path, vocabulary, threads,
+            SessionDecoder decoder(cache, model_generation, model_path, threads,
                                    cancel_requested, callbacks, live_preview);
             auto samples = capture_audio(stop_requested, cancel_requested, callbacks, decoder);
             decoder.finish();
@@ -593,8 +588,7 @@ struct Engine::Impl {
     }
 
     template<class ReadAudio>
-    std::string replay(const std::string& model_path, int threads,
-                       const std::string& vocabulary, ReadAudio read_audio) {
+    std::string replay(const std::string& model_path, int threads, ReadAudio read_audio) {
         {
             std::lock_guard<std::mutex> guard(lifecycle);
             if (!begin(model_path)) throw std::runtime_error("A transcription session is already active.");
@@ -608,7 +602,7 @@ struct Engine::Impl {
                 if (!cancel_requested && audible(samples)) {
                     auto model = cache.acquire(model_path, model_generation);
                     if (!cancel_requested) {
-                        DecoderContext context(std::move(model), vocabulary);
+                        DecoderContext context(std::move(model));
                         text = decode_samples(context, samples, threads, &cancel_requested);
                     }
                 }
@@ -631,13 +625,12 @@ Engine::Engine() : impl_(std::make_unique<Impl>()) {}
 Engine::~Engine() = default;
 
 bool Engine::start(const std::string& model_path, int threads, Callbacks callbacks,
-                   bool live_preview, const std::string& vocabulary) {
+                   bool live_preview) {
     std::lock_guard<std::mutex> guard(impl_->lifecycle);
     if (!impl_->begin(model_path)) return false;
     try {
-        impl_->worker = std::thread([this, model_path, threads, callbacks = std::move(callbacks), live_preview,
-                                    vocabulary = normalize_dictation(vocabulary.substr(0, 1024))] {
-            impl_->run(model_path, threads, callbacks, live_preview, vocabulary);
+        impl_->worker = std::thread([this, model_path, threads, callbacks = std::move(callbacks), live_preview] {
+            impl_->run(model_path, threads, callbacks, live_preview);
         });
     } catch (...) {
         impl_->cache.idle();
@@ -656,15 +649,15 @@ bool Engine::busy() const noexcept { return impl_->running; }
 void Engine::release_model() { impl_->cache.clear(); }
 
 std::string Engine::transcribe(const std::string& model_path, const std::vector<float>& samples,
-                               int threads, const std::string& vocabulary) {
-    return impl_->replay(model_path, threads, vocabulary, [&samples]() -> const std::vector<float>& {
+                               int threads) {
+    return impl_->replay(model_path, threads, [&samples]() -> const std::vector<float>& {
         return samples;
     });
 }
 
 std::string Engine::transcribe_file(const std::string& model_path, const std::string& wav_path,
-                                    int threads, const std::string& vocabulary) {
-    return impl_->replay(model_path, threads, vocabulary, [&wav_path] { return read_wav(wav_path); });
+                                    int threads) {
+    return impl_->replay(model_path, threads, [&wav_path] { return read_wav(wav_path); });
 }
 
 } // namespace lilt

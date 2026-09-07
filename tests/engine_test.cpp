@@ -313,7 +313,7 @@ void model_tests(const std::filesystem::path& directory, const char* model, cons
     restore();
     const auto states = logs.states.load();
     auto replay = std::async(std::launch::async, [&] {
-        return engine.transcribe_file(link.string(), audio, 4, std::string(1400, 'x'));
+        return engine.transcribe_file(link.string(), audio, 4);
     });
     wait_until([&] { return logs.states > states; }, 15s, "Replay initializes a fresh state");
     expect(!engine.start(link.string(), 4, {}), "Capture rejects replay overlap");
@@ -328,7 +328,7 @@ void model_tests(const std::filesystem::path& directory, const char* model, cons
                  "Clearing during decode must not repopulate the cache");
 
     restore();
-    engine.transcribe_file(link.string(), audio, 4, "Lilt, PipeWire, Codex.");
+    engine.transcribe_file(link.string(), audio, 4);
     std::filesystem::remove(link);
     std::cout << "Real-model reuse, fresh states, release, replacement, overlap and cancel passed. "
               << "RSS KiB baseline=" << baseline_rss << " warm=" << warm_rss

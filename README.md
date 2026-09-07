@@ -23,13 +23,13 @@ The microphone closes before finalization; only model weights stay cached for
 sudo apt install build-essential git cmake pkg-config libgtk-3-dev libpulse-dev python3 binutils
 git clone https://github.com/w4term3loon/lilt.git
 cd lilt
-./scripts/build.sh
+./scripts/build.sh -DGGML_NATIVE=ON
 python3 scripts/install.py
 ```
 
-This installs the native app and extension for your user. **Log out and back in**
+This builds for your CPU and installs the app and extension for your user. **Log out and back in**
 to load the extension, then download a model in Preferences. An extracted native
-release archive includes the same installer and needs no compilation.
+release archive uses portable CPU settings and needs no compilation.
 
 Updates also need a new login. Legacy PTT settings/models migrate without
 replacing lilt data or deleting old files; the old extension is disabled.
@@ -48,12 +48,6 @@ weights run locally on the CPU through whisper.cpp. Downloads are quantized by
 [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp/tree/98aa99a0a9db05ae2342309f5096248665f7cba3)
 and verified against pinned sizes and SHA-256 hashes. Download size is not RAM use.
 Settings: `~/.config/lilt/config.ini`; models: `~/.local/share/lilt/models` (XDG overrides apply).
-
-**Optional vocabulary (experimental):** create `~/.config/lilt/vocabulary.txt`
-with one name or term per line (UTF-8, at most 1,024 bytes; XDG overrides apply).
-Whisper uses at most 128 prompt tokens as hints, without training the model.
-An absent or empty file disables hints; deleting it disables them from the next
-recording.
 
 ## Limits
 

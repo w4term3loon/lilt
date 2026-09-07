@@ -25,6 +25,9 @@ or changes to the active desktop. It checks revisions, selection replacement,
 held keys, final insertion without submission, cancellation, and engine restoration.
 Passing fixtures establish neither general application compatibility nor accuracy.
 
+With a local model and 16 kHz mono speech WAV, `build/engine_test MODEL WAV` also
+checks weight reuse, fresh states, cancellation, replacement, and 60-second expiry.
+
 Add focused regressions for actual failures; avoid duplicate scenarios. Inspect
 bars at low/high levels, bouncing finalization dots, and light/dark preferences
 when styling changes. Check inline appearance in a real destination field.

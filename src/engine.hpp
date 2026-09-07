@@ -37,10 +37,8 @@ public:
     // initialization can take longer because Whisper has no abort hook there.
     // Optional previews re-decode growing audio snapshots at most every two
     // seconds, coalescing pending work. This is not a native streaming model.
-    // Vocabulary is optional English spelling context, normalized and bounded
-    // to 1024 UTF-8 bytes / 128 tokens; it is never learned or logged by Lilt.
     bool start(const std::string& model_path, int threads, Callbacks callbacks,
-               bool live_preview = false, const std::string& vocabulary = {});
+               bool live_preview = false);
     void stop();
     void cancel();
     bool busy() const noexcept;
@@ -55,9 +53,9 @@ public:
     // replace it for another model, reject overlap, and obey cancel(). Each call
     // discards its decoder state. Destruction/release_model() drop idle weights.
     std::string transcribe(const std::string& model_path, const std::vector<float>& samples,
-                           int threads = 0, const std::string& vocabulary = {});
+                           int threads = 0);
     std::string transcribe_file(const std::string& model_path, const std::string& wav_path,
-                                int threads = 0, const std::string& vocabulary = {});
+                                int threads = 0);
 
 private:
     struct Impl;

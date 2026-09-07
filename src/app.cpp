@@ -3,9 +3,7 @@
 #include "migration.hpp"
 #include <algorithm>
 #include <filesystem>
-#include <fstream>
 #include <functional>
-#include <stdexcept>
 #include <thread>
 #include <unistd.h>
 #include <csignal>
@@ -60,23 +58,6 @@ constexpr auto kXml = R"(<node><interface name="io.github.lilt.Dictation">
 <signal name="Transcript"><arg type="s" name="text"/></signal>
 </interface></node>)";
 std::string take(gchar* s) { std::string out = s ? s : ""; g_free(s); return out; }
-std::string read_vocabulary() {
-    const auto path = std::filesystem::path(g_get_user_config_dir()) / "lilt/vocabulary.txt";
-    std::error_code error;
-    const auto status = std::filesystem::status(path, error);
-    if (error == std::errc::no_such_file_or_directory) return {};
-    if (error || !std::filesystem::is_regular_file(status))
-        throw std::runtime_error("Could not read vocabulary.txt.");
-    std::ifstream file(path, std::ios::binary);
-    std::string text(1025, '\0');
-    if (!file) throw std::runtime_error("Could not read vocabulary.txt.");
-    file.read(text.data(), text.size());
-    text.resize(file.gcount());
-    if (file.bad()) throw std::runtime_error("Could not read vocabulary.txt.");
-    if (text.size() > 1024 || !g_utf8_validate(text.data(), text.size(), nullptr))
-        throw std::runtime_error("Keep vocabulary.txt to 1024 bytes of UTF-8 text.");
-    return text;
-}
 bool modifier_key(guint key) {
     switch (key) {
     case GDK_KEY_Shift_L: case GDK_KEY_Shift_R:
@@ -259,7 +240,7 @@ void App::toggle() {
     set_state("loading", "Opening microphone…");
     try {
         engine_.start(model_path(), std::max(1u, std::min(4u, std::thread::hardware_concurrency())),
-                      std::move(cb), live_preview_, read_vocabulary());
+                      std::move(cb), live_preview_);
     } catch (const std::exception& error) { set_state("error", error.what()); }
 }
 
