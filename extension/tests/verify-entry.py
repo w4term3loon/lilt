@@ -32,7 +32,7 @@ assert any('revised' in item for item in result['preedit_events']), (root, resul
 log = (root / 'shell.log').read_text(errors='replace')
 assert 'LILT TEST WRONG KEYS state=recording' in log, (root, log)
 assert 'LILT TEST LEVEL changed=true' in log, (root, log)
-assert 'LILT TEST INLINE ready=true grab=false bubble=false' in log, (root, log)
+assert 'LILT TEST INLINE composition=true grab=false' in log, (root, log)
 assert 'LILT TEST HELD composition=true session=true keys=2' in log, (root, log)
 assert 'LILT TEST MODIFIER composition=true session=true keys=1' in log, (root, log)
 assert 'LILT TEST TOGGLE HELD composition=true session=true keys=3' in log, (root, log)

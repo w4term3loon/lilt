@@ -18,7 +18,7 @@ import zipfile
 from install_support import ROOT, copy_extension, copy_file, extension_metadata
 
 SOURCE_FILES = ('CMakeLists.txt', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
-                '.gitignore', '.editorconfig', 'CONTRIBUTING.md', 'SECURITY.md', 'CHANGELOG.md')
+                '.gitignore', '.editorconfig', 'CONTRIBUTING.md', 'CHANGELOG.md')
 SOURCE_DIRS = ('src', 'data', 'extension', 'scripts', 'tests', 'docs', 'LICENSES', '.github')
 CPU_FEATURES = ('NATIVE', 'SSE42', 'AVX', 'AVX2', 'BMI2', 'FMA', 'F16C', 'AVX_VNNI',
                 'AVX512', 'AVX512_VBMI', 'AVX512_VNNI', 'AVX512_BF16',
@@ -64,8 +64,8 @@ def validate_binary(binary, build):
     environment = dict(os.environ)
     environment.pop('LD_LIBRARY_PATH', None)
     linked = subprocess.run(['ldd', str(binary)], env=environment, text=True, capture_output=True, check=True)
-    if 'not found' in linked.stdout or '/.deps/' in linked.stdout:
-        raise ValueError('Executable cannot resolve its runtime libraries without the build sysroot:\n' + linked.stdout)
+    if 'not found' in linked.stdout:
+        raise ValueError('Executable cannot resolve its system runtime libraries:\n' + linked.stdout)
     actual_version = subprocess.check_output([str(binary), '--version'], env=environment, text=True, timeout=5).strip()
     if actual_version != 'lilt ' + version():
         raise ValueError('Executable version does not match CMakeLists.txt; rebuild before packaging')
@@ -75,9 +75,7 @@ def validate_binary(binary, build):
 
 def release_source_files():
     for name in SOURCE_FILES:
-        path = ROOT / name
-        if path.is_file():
-            yield path
+        yield ROOT / name
     for name in SOURCE_DIRS:
         for path in sorted((ROOT / name).rglob('*')):
             if not path.is_file() or path.is_symlink():
@@ -149,7 +147,7 @@ def package(build, output):
                     archive.write(path, path.relative_to(extension))
         bundle_name = f'lilt-{current_version}-ubuntu-24.04-x86_64'
         bundle = work / bundle_name
-        for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md', 'LICENSES/whisper.cpp-MIT.txt',
+        for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'LICENSES/whisper.cpp-MIT.txt',
                      'data/io.github.lilt.Dictation.svg', 'scripts/install.py', 'scripts/install_support.py',
                      'scripts/uninstall.py', 'scripts/download-model.py'):
             copy_file(ROOT / name, bundle / name)

@@ -87,7 +87,7 @@ def extension_files():
     """Only runtime code/assets enter an installation or extension ZIP."""
     extension = ROOT / 'extension'
     files = [extension / 'metadata.json', extension / 'stylesheet.css']
-    files += sorted(path for path in extension.glob('*.js') if not path.name.startswith('test-'))
+    files += sorted(extension.glob('*.js'))
     files += sorted((extension / 'schemas').glob('*.gschema.xml'))
     for path in files:
         if not path.is_file() or path.is_symlink():
@@ -124,12 +124,11 @@ def write_text(target, content):
         temporary.unlink(missing_ok=True)
 
 
-def copy_extension(target, include_license=True):
+def copy_extension(target):
     target.mkdir(parents=True, exist_ok=True)
     for source in extension_files():
         copy_file(source, target / source.relative_to(ROOT / 'extension'))
-    if include_license:
-        copy_file(ROOT / 'LICENSE', target / 'LICENSE')
+    copy_file(ROOT / 'LICENSE', target / 'LICENSE')
     subprocess.run(['glib-compile-schemas', '--strict', str(target / 'schemas')], check=True)
 
 

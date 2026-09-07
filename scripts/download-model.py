@@ -115,7 +115,7 @@ def interrupted(_signum, _frame):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("model", nargs="?", choices=MODELS, default="small.en-q5_1")
-    parser.add_argument("--directory", "--dir", type=Path, default=default_directory(), help="model directory")
+    parser.add_argument("--directory", type=Path, default=default_directory(), help="model directory")
     parser.add_argument("--list", action="store_true", help="show supported models without downloading")
     parser.add_argument("--force", action="store_true", help="replace an existing model that fails verification")
     args = parser.parse_args(argv)

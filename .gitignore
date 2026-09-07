@@ -1,7 +1,5 @@
 /build/
 /build-*/
-/_build/
-/_build-*/
 /dist/
 /.deps/
 /.cache/

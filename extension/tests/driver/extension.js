@@ -70,7 +70,7 @@ export default class Driver extends Extension {
         this.later(420, () => this.tap(Clutter.KEY_F8));
         this.later(600, () => {
             console.log(`LILT TEST WRONG KEYS state=${this.lilt._state}`);
-            console.log(`LILT TEST INLINE ready=${this.lilt._composition?.ready} grab=${!!this.lilt._grab} bubble=${!!this.lilt._preview}`);
+            console.log(`LILT TEST INLINE composition=${!!this.lilt._composition} grab=${!!this.lilt._grab}`);
             this.snapshot('draft');
             this.capture('recording');
             this.recordingScale = this.lilt._bars[4].scale_y;

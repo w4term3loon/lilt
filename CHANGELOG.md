@@ -1,24 +1,10 @@
 # Changelog
 
-## 0.5.0 — 2026-09-07
+## 0.5.0
 
-- Adopt the name **lilt** across the application, extension, command line,
-  D-Bus interface, settings, and documentation.
-- Preserve settings and model files from the earlier PTT prototype without
-  overwriting an existing lilt configuration or deleting the old files.
-- Fix stale D-Bus callbacks when the extension is disabled and enabled again.
-- Remove the production extension's Gdk dependency.
-- Prepare portable CPU builds, standalone installation archives, extension ZIPs,
-  checksums, and automated build/package checks.
-- Add GPL-3.0-or-later licensing and third-party notices.
-
-## 0.4.0 — prototype
-
-- Live input-method composition in the destination field, with cancel and
-  explicit final insertion.
-- English Tiny, Base, Small, and Medium Whisper model choices.
-- Configurable Start and Finish shortcuts, a recording indicator, and local
-  CPU transcription.
-
-Earlier development measurements and compatibility results are recorded in
-[docs/validation.md](docs/validation.md).
+- Introduce lilt, with local CPU dictation and GNOME 46 integration.
+- Provide live composition, configurable Start/Finish keys, and English models.
+- Preserve configuration and models from the PTT prototype.
+- Fix stale D-Bus callbacks and IBus cleanup during extension reloads.
+- Provide portable native, extension, and matching source release archives.
+- Include focused core tests and one isolated desktop integration harness.

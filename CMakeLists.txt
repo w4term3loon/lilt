@@ -39,8 +39,7 @@ add_executable(lilt src/main.cpp src/app.cpp)
 target_link_libraries(lilt PRIVATE lilt_engine PkgConfig::GTK)
 target_compile_definitions(lilt PRIVATE LILT_VERSION="${PROJECT_VERSION}")
 target_compile_options(lilt PRIVATE -Wall -Wextra -Wpedantic)
-# The optional local sysroot is a build aid, never a runtime dependency. The
-# installer copies this executable directly, so give it its final RPATH now.
+# The installer copies this executable directly; keep build paths out of it.
 set_target_properties(lilt PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "")
 if(BUILD_TESTING)
   add_executable(engine_test tests/engine_test.cpp)
@@ -52,7 +51,24 @@ if(BUILD_TESTING)
   find_program(LILT_PYTHON python3)
   find_program(LILT_GJS gjs)
   find_program(LILT_DBUS_RUN_SESSION dbus-run-session)
-  find_program(LILT_XVFB Xvfb HINTS "${CMAKE_CURRENT_SOURCE_DIR}/.deps/sysroot/usr/bin")
+  find_program(LILT_XVFB Xvfb)
+  if(LILT_GJS)
+    add_test(NAME extension_text
+      COMMAND "${LILT_GJS}" -m "${CMAKE_CURRENT_SOURCE_DIR}/extension/tests/test-text.js")
+    execute_process(COMMAND "${LILT_GJS}" -c
+      "imports.gi.versions.Gdk = '3.0'; imports.gi.Gdk; imports.gi.IBus;"
+      RESULT_VARIABLE LILT_GJS_GI_RESULT OUTPUT_QUIET ERROR_QUIET TIMEOUT 5)
+    if(LILT_GJS_GI_RESULT EQUAL 0)
+      foreach(test session lifecycle)
+        add_test(NAME extension_${test}
+          COMMAND "${LILT_GJS}" "${CMAKE_CURRENT_SOURCE_DIR}/extension/tests/test-${test}.js")
+      endforeach()
+    else()
+      message(STATUS "Gdk/IBus introspection unavailable; skipping extension session/lifecycle tests")
+    endif()
+  else()
+    message(STATUS "GJS unavailable; skipping extension unit tests")
+  endif()
   if(LILT_PYTHON)
     add_test(NAME packaging
       COMMAND "${LILT_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_packaging.py")

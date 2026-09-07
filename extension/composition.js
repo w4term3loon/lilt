@@ -3,7 +3,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import IBus from 'gi://IBus';
 
-import {insertionText, previewParts} from './text.js';
+import {insertionText, compositionParts} from './text.js';
 
 const IBUS_NAME = 'org.freedesktop.IBus';
 const IBUS_PATH = '/org/freedesktop/IBus';
@@ -136,10 +136,6 @@ export class Composition {
         this._disposed = false;
     }
 
-    get ready() {
-        return Boolean(this._session?.ready && !this._session.cancelled);
-    }
-
     begin() {
         if (this._disposed)
             return Promise.reject(new Error('Dictation is unavailable.'));
@@ -149,7 +145,7 @@ export class Composition {
             name: `lilt-dictation-${GLib.uuid_string_random()}`,
             originalContext: null, focusedContext: null, previousEngine: null,
             capabilities: 0, cancelled: false, closing: false, ready: false,
-            switched: false, committed: false, lost: false, focusSerial: 0,
+            committed: false, lost: false, focusSerial: 0,
             sources: new Set(),
         };
         this._session = session;
@@ -201,11 +197,8 @@ export class Composition {
 
             // The factory lives on this main loop: synchronous engine switching
             // would deadlock while IBus waits for our CreateEngine response.
-            session.switching = true;
             await call(session.connection, 'SetGlobalEngine',
                 new GLib.Variant('(s)', [session.name]));
-            session.switched = true;
-            session.switching = false;
             this._check(session);
             await this._waitForFocus(session);
             this._check(session);
@@ -279,7 +272,6 @@ export class Composition {
                 this._lost(session, 'This text field does not support live dictation.');
         });
         engine.connect('set-content-type', (_engine, purpose) => {
-            session.purpose = purpose;
             if (purpose === IBus.InputPurpose.PASSWORD || purpose === IBus.InputPurpose.PIN)
                 this._lost(session, 'Dictation is unavailable in password fields.');
         });
@@ -344,7 +336,7 @@ export class Composition {
         if (!session?.ready || session.cancelled || session.closing ||
             session.committed || session.focusedContext !== session.originalContext)
             return;
-        const parts = previewParts(text, stableBytes, Number.POSITIVE_INFINITY);
+        const parts = compositionParts(text, stableBytes);
         const content = parts.stable + parts.tentative;
         const length = [...content].length;
         const stable = [...parts.stable].length;

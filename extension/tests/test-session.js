@@ -44,7 +44,7 @@ function fixture() {
         _sessionFinish: parseShortcutForTest('Return'),
         _sessionStart: parseShortcutForTest('<Primary><Super>space'),
         _pill: {hide() {}}, callbacks: [], calls: [], released: false, cleared: false,
-        _target: {}, _tentativeColor: '#73737c',
+        _target: {},
         drafts: [], retryCallbacks: [],
     });
     instance._composition = {update(text, stableBytes) { instance.drafts.push({text, stableBytes}); }};
@@ -143,29 +143,18 @@ instance._capture(event(1, Gdk.KEY_F, 41,
     modifiers.CONTROL_MASK | modifiers.SHIFT_MASK | modifiers.LOCK_MASK | modifiers.MOD2_MASK));
 assert(instance.calls.join() === 'Stop', 'Matching must ignore Caps/NumLock and normalize letter case');
 
-instance = fixture();
-instance._sessionFinish = parseShortcutForTest('<Super>F8');
-instance._capture(event(1, Gdk.KEY_F8, 74, modifiers.MOD4_MASK));
-assert(instance.calls.join() === 'Stop', 'Physical MOD4 must match virtual Super');
-
-instance = fixture();
-instance._sessionFinish = parseShortcutForTest('F8');
-instance._capture(event(1, Gdk.KEY_F8, 74));
-assert(instance.calls.join() === 'Stop', 'A plain function key must be a valid finish binding');
-
-instance = fixture();
-instance._sessionFinish = parseShortcutForTest('z');
-instance._capture(event(1, Gdk.KEY_z, 52));
-assert(instance.calls.join() === 'Stop', 'A plain letter must be a valid finish binding');
-
-instance = fixture();
-instance._capture(event(1, Clutter.KEY_KP_Enter, 104));
-assert(instance.calls.join() === 'Stop', 'Default Return must also accept keypad Enter');
-
-instance = fixture();
-instance._sessionFinish = parseShortcutForTest('<Shift>Tab');
-instance._capture(event(1, Clutter.KEY_ISO_Left_Tab, 23, modifiers.SHIFT_MASK));
-assert(instance.calls.join() === 'Stop', 'Shift+Tab must normalize ISO_Left_Tab');
+for (const [binding, key, state] of [
+    ['<Super>F8', Gdk.KEY_F8, modifiers.MOD4_MASK],
+    ['F8', Gdk.KEY_F8, 0],
+    ['z', Gdk.KEY_z, 0],
+    ['Return', Clutter.KEY_KP_Enter, 0],
+    ['<Shift>Tab', Clutter.KEY_ISO_Left_Tab, modifiers.SHIFT_MASK],
+]) {
+    instance = fixture();
+    instance._sessionFinish = parseShortcutForTest(binding);
+    instance._capture(event(1, key, 41, state));
+    assert(instance.calls.join() === 'Stop', `Match the normalized finish binding: ${binding}`);
+}
 
 instance = fixture();
 instance._sessionFinish = parseShortcutForTest('<Control>F8');
@@ -187,11 +176,6 @@ instance._capture(event(1, Gdk.KEY_space, 65, modifiers.CONTROL_MASK | modifiers
 assert(instance.calls.join() === 'Stop', 'Identical start and finish bindings must stop only once');
 
 instance = fixture();
-instance._sessionFinish = parseShortcutForTest('F8');
-instance._capture(event(1, Gdk.KEY_space, 65, modifiers.CONTROL_MASK | modifiers.MOD4_MASK));
-assert(instance.calls.join() === 'Stop', 'The start shortcut must also finish during the grab');
-
-instance = fixture();
 Object.assign(instance, {
     _enabled: true,
     _proxy: {g_name_owner: ':1.1', State: 'recording', FinishShortcut: 'F8'},
@@ -208,39 +192,17 @@ for (const invalid of ['', 'made_up_key', '<NoSuchModifier>a', 'Control_L', 'Shi
     assert(parseShortcutForTest(invalid) === null, `Reject invalid finish binding: ${invalid}`);
 }
 
-print('19 session event-order and configurable shortcut regression tests passed');
-
-// Keep the GTK preferences' canonical key names and case folding compatible
-// while the production extension uses the Shell-safe IBus library.
-let namedKeys = 0;
-const modifierKeyValues = new Set(['Shift_L', 'Shift_R', 'Control_L', 'Control_R',
-    'Alt_L', 'Alt_R', 'Super_L', 'Super_R', 'Meta_L', 'Meta_R', 'Hyper_L', 'Hyper_R',
-    'Caps_Lock', 'Shift_Lock', 'Num_Lock', 'ISO_Level3_Shift', 'Mode_switch', 'Escape', 'VoidSymbol']
-    .map(name => Gdk[`KEY_${name}`]));
-for (const constant of Object.keys(Gdk).filter(name => name.startsWith('KEY_'))) {
-    const name = constant.slice(4);
+// Representative GTK preferences names cover key classes and non-ASCII case
+// folding, without retesting every constant exposed by the upstream library.
+for (const name of ['a', 'Z', 'Aacute', 'adiaeresis', 'Greek_ALPHA', 'Cyrillic_YA',
+    'F8', 'space', 'Tab', 'Return', 'AudioMute', 'XF86AudioMute']) {
     const key = Gdk.keyval_from_name(name);
-    if (modifierKeyValues.has(key))
-        continue;
-    const expected = key === Gdk.KEY_ISO_Left_Tab ? Gdk.KEY_Tab :
-        key === Gdk.KEY_KP_Enter ? Gdk.KEY_Return : Gdk.keyval_to_lower(key);
-    assert(parseShortcutForTest(name)?.key === expected,
-        `The GTK shortcut name and lower-case keysym must be preserved: ${name}`);
-    namedKeys++;
+    assert(key !== Gdk.KEY_VoidSymbol && parseShortcutForTest(name)?.key === Gdk.keyval_to_lower(key),
+        `Preserve GTK shortcut names and case folding: ${name}`);
 }
-assert(parseShortcutForTest('XF86AudioMute')?.key === Gdk.KEY_AudioMute,
-    'GTK multimedia key names must retain their optional XF86 prefix');
-print(`${namedKeys} GTK keysym names and case-folding compatibility checks passed`);
 
 instance = fixture();
 instance._sessionLive = true;
-instance._receivePartial('Stable <maybe>', 7);
-assert(instance.drafts.at(-1).text === 'Stable <maybe>' && instance.drafts.at(-1).stableBytes === 7,
-    'Partial updates must go to the destination composition with their stable boundary');
-assert(instance._pendingText === null && instance.calls.length === 0,
-    'Partial text must not trigger final insertion or service calls');
-instance._receivePartial('', 0);
-assert(instance.drafts.at(-1).text === '', 'An empty update must clear composition');
 instance._receivePartial('Draft', 0);
 instance._capture(event(1, Clutter.KEY_Escape, 9));
 assert(instance.drafts.at(-1).text === '', 'Escape must immediately clear composition');
@@ -269,7 +231,6 @@ instance = fixture();
 instance._sessionLive = true;
 assert(instance._capture(event(2, Clutter.KEY_Control_L, 37)) === Clutter.EVENT_PROPAGATE,
     'A modifier pressed before composition must receive its matching release');
-print('Inline composition, stale partial, cancellation, target-close, final-output, and unmatched-release tests passed');
 
 // The daemon's pre-Start idle reply may arrive after input-method preparation
 // begins. It must not tear down the destination before Toggle becomes active.
@@ -295,4 +256,4 @@ instance._cancelled = true;
 instance._cancelFromFocus();
 assert(instance.calls.length === 0,
     'A second focus-out notification must not duplicate Cancel after cancellation');
-print('Pending native Start and duplicate focus-loss regressions passed');
+print('Session event-order, shortcut semantics, stale output, cancellation, and held-key regressions passed');

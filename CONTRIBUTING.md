@@ -1,24 +1,62 @@
-# Contributing to lilt
+# Contributing
 
-lilt targets Ubuntu 24.04, GNOME Shell 46, and English dictation. Keep recognition
-and audio capture in the native application; the extension handles desktop UI,
-shortcuts, and input-method integration.
+Build dependencies and user setup are in the [README](README.md). Keep audio and
+recognition in the native application and desktop integration in the extension.
+The [extension reference](extension/README.md) describes the D-Bus contract.
 
-Read the [README](README.md) for build dependencies and setup. Build and run the
-native tests with `./scripts/build.sh`. Run the extension text/session tests and
-the isolated GNOME integration tests listed in [extension/README.md](extension/README.md).
-Tests must use private D-Bus, XDG, and display sessions: do not record a real
-microphone or modify the contributor's active desktop without their consent.
+## Tests
 
-For a bug report, include the lilt version, Ubuntu and GNOME Shell versions,
-Wayland/X11 session type, affected application, selected model, and steps to
-reproduce. Remove private text from logs and screenshots. The existing
-[validation notes](docs/validation.md) distinguish synthetic integration tests
-from actual recognition measurements.
+`./scripts/build.sh` builds the application and runs CTest. With the README's test
+dependencies installed, the core suite covers:
 
-For changes, explain the user-visible problem, the resulting behavior, and the
-checks performed. Add regressions for lifecycle, input handling, data migration,
-and packaging bugs. Update supported GNOME versions only after testing them.
+- Text/Unicode handling, WAV validation, inference queues, and cancellation.
+- Legacy configuration/model migration without overwriting user data.
+- Native D-Bus startup, restart, trusted attachment, and error handling.
+- Shortcut matching, held keys, stale replies, and extension cleanup.
+- Installation, upgrades, uninstallation, quoting, and staging containment.
 
-Contributions are provided under GPL-3.0-or-later, the project's license.
-Keep upstream attribution when incorporating third-party code.
+The single desktop harness runs against real GNOME/GTK input services:
+
+```bash
+for mode in wayland ibus x11; do
+    bash extension/tests/headless-smoke.sh "$mode"
+done
+```
+
+It checks draft revision, final insertion, no unintended submission, cancellation,
+focus loss, and input-method restoration. All integration fixtures use private
+D-Bus/XDG/display sessions and synthetic recognition. A passing harness does not
+establish compatibility with every application or a transcription accuracy score.
+
+After building release artifacts, verify their contents and extracted installer:
+
+```bash
+python3 scripts/package.py --output dist
+python3 tests/test_packaging.py --archives dist
+```
+
+CI runs these core, desktop, and archive checks. For changes, describe the problem,
+resulting behavior, and relevant verification. Add focused regressions for real
+bugs; avoid tests of unused code and duplicated integration scenarios.
+
+## Installation paths
+
+The installer defaults to `~/.local`, respecting `XDG_DATA_HOME`. For staging:
+
+```bash
+python3 scripts/install.py --prefix /usr --data-dir /usr/share --destdir /tmp/lilt-stage
+```
+
+`--destdir` redirects filesystem writes and never contacts the active desktop.
+`--no-enable` installs files without modifying extension state. A custom live
+installation's data directory must be discoverable through GNOME/D-Bus's XDG
+paths; changing the executable prefix alone does not configure discovery.
+
+The installed uninstaller is `PREFIX/share/lilt/uninstall.py`. It remembers the
+installation layout. Models/configuration use runtime XDG directories separately;
+`--user-data-dir` and `--config-dir` select their bases when using `--purge-data`.
+
+## License
+
+Contributions use GPL-3.0-or-later. Preserve notices for incorporated third-party
+code. Only add GNOME versions to metadata after testing them.

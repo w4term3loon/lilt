@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise isolated installation, removal, release payloads, and portability."""
+"""Run installation checks, or only release payload checks with --archives DIR."""
 
 import argparse
 import hashlib
@@ -22,9 +22,9 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 from install_support import extension_files, extension_metadata  # noqa: E402
 
 
-class InstallationTests(unittest.TestCase):
+class InstallationFixture(unittest.TestCase):
     def setUp(self):
-        if not BINARY.is_file() or not shutil.which('glib-compile-schemas'):
+        if not shutil.which('glib-compile-schemas') or (not ARCHIVES and not BINARY.is_file()):
             self.skipTest('Built binary and glib-compile-schemas are required')
         self.directory = tempfile.TemporaryDirectory(prefix='lilt-package-test-')
         self.addCleanup(self.directory.cleanup)
@@ -64,6 +64,8 @@ class InstallationTests(unittest.TestCase):
             arguments += ['--binary', BINARY]
         self.run_script(source / 'scripts/install.py', *arguments)
 
+
+class InstallationTests(InstallationFixture):
     def test_staged_install_upgrade_and_uninstall_preserve_data(self):
         self.install()
         installed = self.stage_path(self.prefix / 'bin/lilt')
@@ -179,9 +181,11 @@ class InstallationTests(unittest.TestCase):
         self.assertTrue(marker.is_file(), result.stdout + result.stderr)
         self.assertIn('--daemon', marker.read_text())
 
+
+class ArchiveTests(InstallationFixture):
     def test_release_archives(self):
         if not ARCHIVES:
-            self.skipTest('Pass --archives DIR for release archive verification')
+            self.skipTest('Pass --archives DIR to verify release archives')
         sums = (ARCHIVES / 'SHA256SUMS').read_text().splitlines()
         self.assertEqual(len(sums), 3)
         for entry in sums:
@@ -217,4 +221,5 @@ if __name__ == '__main__':
     parser.add_argument('--archives', type=Path)
     options, remaining = parser.parse_known_args()
     ARCHIVES = options.archives.resolve() if options.archives else None
-    unittest.main(argv=[sys.argv[0], *remaining])
+    unittest.main(defaultTest='ArchiveTests' if ARCHIVES else 'InstallationTests',
+                  argv=[sys.argv[0], *remaining])

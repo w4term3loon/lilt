@@ -245,8 +245,6 @@ export default class LiltExtension extends Extension {
         });
         this._pill.connect('notify::allocation', () => this._positionPill());
         Main.layoutManager.addTopChrome(this._pill);
-
-
     }
 
     _bindShortcut() {
