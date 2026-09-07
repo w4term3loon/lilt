@@ -12,6 +12,7 @@ if [[ ${1:-} != --inside ]]; then
     lilt_report_failure() {
         python3 - "$lilt_test_root" "$lilt_test_mode" <<'PY'
 import os
+import json
 from pathlib import Path
 import re
 import sys
@@ -22,6 +23,15 @@ markers = ', '.join(f'{name}={"yes" if (root / name).exists() else "no"}'
                     for name in ['display.json', 'entry-result.json', 'complete'])
 summary = [f'GNOME {mode} integration failed ({markers}).']
 print(summary[0])
+if (root / 'entry-result.json').is_file():
+    try:
+        result = json.loads((root / 'entry-result.json').read_text())
+    except (OSError, ValueError):
+        result = {}  # The still-running fixture may be writing this snapshot.
+    details = {key: result.get(key) for key in ['Attach', 'Toggle', 'Stop', 'Cancel', 'errors']}
+    message = 'Fixture: ' + json.dumps(details, ensure_ascii=True)[:650]
+    print(message)
+    summary.append(message)
 for name in ['verify.log', 'entry.log', 'shell.log', 'systemd.log', 'session.log']:
     path = root / name
     if not path.is_file():
@@ -114,8 +124,8 @@ else:
 os.execve('/usr/bin/python3', ['python3', env['LILT_EXTENSION_DIR'] + '/tests/entry.py'], env)
 PY
 lilt_entry_pid=$!
-# Allow the timed scenarios plus seven bounded five-second IBus handovers.
-for lilt_attempt in {1..300}; do
+# Allow desktop readiness, timed scenarios, and seven bounded IBus handovers.
+for lilt_attempt in {1..375}; do
     [[ ! -f "$LILT_SMOKE_ROOT/complete" ]] || break
     sleep 0.2
 done

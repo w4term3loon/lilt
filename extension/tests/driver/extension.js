@@ -28,23 +28,29 @@ export default class Driver extends Extension {
     }
 
     fixture(method, signature = '', args = []) {
-        Gio.DBus.session.call('io.github.lilt.Dictation', '/io/github/lilt/Dictation',
-            'io.github.lilt.TestEntry', method,
-            signature ? new GLib.Variant(signature, args) : null, null,
-            Gio.DBusCallFlags.NONE, 3000, null, (connection, result) => {
-                try {
-                    connection.call_finish(result);
-                    if (method === 'Snapshot' && args[0] === 'target-closed')
-                        GLib.file_set_contents(GLib.build_filenamev([
-                            GLib.getenv('LILT_SMOKE_ROOT'), 'complete']), 'true');
-                } catch (error) {
-                    console.error(`LILT TEST FIXTURE ERROR ${error.message}`);
-                }
-            });
+        const call = new Promise((resolve, reject) => {
+            Gio.DBus.session.call('io.github.lilt.Dictation', '/io/github/lilt/Dictation',
+                'io.github.lilt.TestEntry', method,
+                signature ? new GLib.Variant(signature, args) : null, null,
+                Gio.DBusCallFlags.NONE, 3000, null, (connection, result) => {
+                    try {
+                        connection.call_finish(result);
+                        if (method === 'Snapshot' && args[0] === 'target-closed')
+                            GLib.file_set_contents(GLib.build_filenamev([
+                                GLib.getenv('LILT_SMOKE_ROOT'), 'complete']), 'true');
+                        resolve();
+                    } catch (error) {
+                        reject(error);
+                    }
+                });
+        });
+        // Some timed observations intentionally do not await their reply.
+        call.catch(error => console.error(`LILT TEST FIXTURE ERROR ${error.message}`));
+        return call;
     }
 
-    snapshot(name) { this.fixture('Snapshot', '(s)', [name]); }
-    prepare() { this.fixture('Prepare', '(sii)', ['before REPLACE after', 7, 14]); }
+    snapshot(name) { return this.fixture('Snapshot', '(s)', [name]); }
+    prepare() { return this.fixture('Prepare', '(sii)', ['before REPLACE after', 7, 14]); }
 
     focus(title) {
         const target = global.get_window_actors().map(actor => actor.meta_window)
@@ -56,16 +62,51 @@ export default class Driver extends Extension {
 
     run() {
         this.lilt = Main.extensionManager.lookup(GLib.getenv('LILT_EXTENSION_UUID')).stateObj;
-        if (!this.focus('lilt test entry')) {
+        const target = global.get_window_actors().map(actor => actor.meta_window)
+            .find(window => window.title === 'lilt test entry');
+        if (!target) {
             this.later(500, () => this.run());
             return;
         }
-        Main.overview.hide();
-        this.later(250, () => this.prepare());
-        this.later(400, () => this.snapshot('before-start'));
-        this.later(500, () => this.exercise().catch(error => {
+        this.prepareAndRun(target).catch(error => {
             console.error(`LILT TEST FIXTURE ERROR ${error.message}`);
-        }));
+        });
+    }
+
+    async prepareAndRun(target) {
+        const deadline = GLib.get_monotonic_time() + 10 * 1000000;
+        const nativeWayland = GLib.getenv('LILT_SMOKE_MODE') === 'wayland';
+        let activated = false;
+        while (true) {
+            // Startup/Overview mode can discard a NORMAL-only shortcut. Focus
+            // once after startup, then wait for the real readiness conditions.
+            if (!Main.layoutManager._startingUp && !activated) {
+                Main.activateWindow(target);
+                Main.overview.hide();
+                activated = true;
+            }
+            const ready = {
+                startupComplete: !Main.layoutManager._startingUp,
+                normalMode: Main.actionMode === Shell.ActionMode.NORMAL,
+                overviewHidden: !Main.overview.visible,
+                targetFocused: global.display.focus_window === target,
+                proxyReady: !!this.lilt._proxyReady,
+                attached: !!this.lilt._attached,
+                nativeTextFocus: !nativeWayland || !!Main.inputMethod.currentFocus,
+                nativeInputContext: !nativeWayland || !!Main.inputMethod._context,
+            };
+            const missing = Object.keys(ready).filter(name => !ready[name]);
+            if (!missing.length) break;
+            if (GLib.get_monotonic_time() >= deadline)
+                throw new Error(`Initial input not ready: ${missing.map(name => `${name}=false`).join(', ')}`);
+            await this.pause(25);
+        }
+        await this.pause(250);
+        await this.prepare();
+        await this.pause(150);
+        await this.snapshot('before-start');
+        await this.pause(100);
+        await this.exercise();
     }
 
     async startRecording() {
