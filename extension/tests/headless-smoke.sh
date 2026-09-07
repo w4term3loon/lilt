@@ -9,6 +9,48 @@ if [[ ${1:-} != --inside ]]; then
     lilt_test_root=$(mktemp -d /tmp/lilt-shell-test.XXXXXX)
     lilt_test_mode=${1:-wayland}
     case "$lilt_test_mode" in wayland|ibus|x11) ;; *) printf 'Use wayland, ibus, or x11.\n' >&2; exit 2 ;; esac
+    lilt_report_failure() {
+        python3 - "$lilt_test_root" "$lilt_test_mode" <<'PY'
+import os
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+mode = sys.argv[2]
+markers = ', '.join(f'{name}={"yes" if (root / name).exists() else "no"}'
+                    for name in ['display.json', 'entry-result.json', 'complete'])
+summary = [f'GNOME {mode} integration failed ({markers}).']
+print(summary[0])
+for name in ['verify.log', 'entry.log', 'shell.log', 'systemd.log', 'session.log']:
+    path = root / name
+    if not path.is_file():
+        continue
+    with path.open('rb') as stream:
+        stream.seek(max(0, path.stat().st_size - 32768))
+        text = stream.read().decode('utf-8', errors='replace')
+    for value, label in [(str(root), '<test>'), (str(Path.cwd()), '<checkout>'),
+                         (str(Path.home()), '<home>')]:
+        text = text.replace(value, label)
+    text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
+    text = ''.join(char for char in text if char >= ' ' or char in '\n\t')
+    lines = [line[:500] for line in text.splitlines() if line.strip()]
+    for line in lines[-30:]:
+        # Prefix every synthetic log line so it cannot become a workflow command.
+        print(f'[{name}] {line}')
+    useful = [line for line in lines if re.search(
+        r'error|fatal|exception|traceback|assert|failed|not found|no such|could not',
+        line, re.IGNORECASE)]
+    excerpt = list(dict.fromkeys(useful[-5:] + lines[-3:]))
+    if excerpt:
+        budget = 1400 if name == 'shell.log' else 650
+        summary.append(f'{name}: ' + '\n'.join(excerpt)[:budget])
+if os.environ.get('GITHUB_ACTIONS') == 'true':
+    message = '\n'.join(summary)[:4500]
+    message = message.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+    print(f'::error title=GNOME {mode} integration failed::{message}')
+PY
+    }
     lilt_install_dir="$lilt_test_root/data/gnome-shell/extensions/$lilt_extension_uuid"
     mkdir -p "$lilt_install_dir/schemas" "$lilt_test_root"/{config,cache,runtime}
     chmod 700 "$lilt_test_root/runtime"
@@ -22,9 +64,14 @@ if [[ ${1:-} != --inside ]]; then
         LILT_SMOKE_ROOT="$lilt_test_root" LILT_EXTENSION_DIR="$lilt_extension_dir" LILT_EXTENSION_UUID="$lilt_extension_uuid" LILT_SMOKE_MODE="$lilt_test_mode" \
         dbus-run-session -- bash "$0" --inside >"$lilt_test_root/session.log" 2>&1 || {
             printf 'Integration test failed. Logs: %s\n' "$lilt_test_root"
+            lilt_report_failure
             exit 1
         }
-    python3 "$lilt_extension_dir/tests/verify-entry.py" "$lilt_test_root" "$lilt_test_mode"
+    if ! python3 "$lilt_extension_dir/tests/verify-entry.py" "$lilt_test_root" "$lilt_test_mode" >"$lilt_test_root/verify.log" 2>&1; then
+        lilt_report_failure
+        exit 1
+    fi
+    cat "$lilt_test_root/verify.log"
     exit
 fi
 
