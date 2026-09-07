@@ -86,7 +86,7 @@ Review recognized text before sending it.
 and run the desktop test with:
 
 ```bash
-sudo apt install gjs gir1.2-gtk-3.0 gir1.2-ibus-1.0 xvfb dbus-x11 python3-gi
+sudo apt install gjs gir1.2-gtk-3.0 gir1.2-ibus-1.0 ibus-gtk3 xvfb dbus-x11 python3-gi
 ./scripts/build.sh
 bash extension/tests/headless-smoke.sh wayland
 ```

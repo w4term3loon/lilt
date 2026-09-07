@@ -41,9 +41,18 @@ for name in ['verify.log', 'entry.log', 'shell.log', 'systemd.log', 'session.log
     useful = [line for line in lines if re.search(
         r'error|fatal|exception|traceback|assert|failed|not found|no such|could not',
         line, re.IGNORECASE)]
-    excerpt = list(dict.fromkeys(useful[-5:] + lines[-3:]))
+    if name == 'shell.log':
+        # Keep the first scenario's bridge state visible in public annotations;
+        # later cleanup and desktop warnings otherwise bury the relevant lines.
+        route = [line[line.index('LILT TEST '):] for line in lines if re.search(
+            r'LILT TEST (ROUTE|SESSION|KEYS) ', line)]
+        status = [line[line.index('LILT TEST '):] for line in lines if re.search(
+            r'LILT TEST (WRONG KEYS|INLINE|HELD|FINISHED|FIXTURE ERROR) ', line)]
+        excerpt = list(dict.fromkeys(route[:7] + status[:5] + useful[-3:]))
+    else:
+        excerpt = list(dict.fromkeys(useful[-5:] + lines[-3:]))
     if excerpt:
-        budget = 1400 if name == 'shell.log' else 650
+        budget = 2800 if name == 'shell.log' else 350 if name == 'entry.log' else 650
         summary.append(f'{name}: ' + '\n'.join(excerpt)[:budget])
 if os.environ.get('GITHUB_ACTIONS') == 'true':
     message = '\n'.join(summary)[:4500]
