@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
-project(lilt VERSION 0.5.0 LANGUAGES C CXX)
+project(lilt VERSION 0.5.1 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Keep local checkout paths out of diagnostic strings, including dependencies.
+add_compile_options("-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=")
 include(FetchContent)
 include(CTest)
 find_package(PkgConfig REQUIRED)

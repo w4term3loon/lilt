@@ -4,6 +4,8 @@ Local voice typing for **Ubuntu 24.04, GNOME Shell 46, and x86-64**.
 A C++ application handles audio and Whisper transcription; a small GNOME
 extension handles shortcuts, the recording indicator, and text insertion.
 
+[Source repository](https://github.com/w4term3loon/lilt) · [Roadmap](docs/roadmap.md)
+
 ![Live composition in an isolated GTK test](docs/live-preedit.png)
 
 The screenshot uses synthetic text. Composition styling varies by application.
@@ -18,16 +20,23 @@ Enter finishes dictation without submitting the field. Pressing Start again also
 finishes. Set Start, Finish, the model, and Live text in Preferences, available
 from the top-bar microphone or the **lilt** application launcher.
 
+Nine rounded bars respond to your voice; three bouncing dots indicate final
+processing. Preferences keeps the four controls in a compact, centered layout.
+Draft text requests muted green without an underline. GTK's IBus input module
+honors these styles; Chromium and GNOME's native Wayland path can override them.
+
 Audio stays in memory. There is no cloud transcription, telemetry, clipboard
 access, or recording history. Models download only on request; dictation then
 works offline. The default microphone comes from Ubuntu Sound settings.
 
 ## Install
 
-From the source checkout:
+Clone the repository and install from the source checkout:
 
 ```bash
 sudo apt install build-essential git cmake pkg-config libgtk-3-dev libpulse-dev python3 binutils
+git clone https://github.com/w4term3loon/lilt.git
+cd lilt
 ./scripts/build.sh
 python3 scripts/install.py
 ```
@@ -38,8 +47,7 @@ Open Preferences to download a model. To use an extracted native release archive
 run its `python3 scripts/install.py`; compilation is unnecessary.
 
 The native application and extension must both be installed. Only GNOME 46 is
-supported. The repository URL is not yet assigned; the extension currently uses
-`lilt@local`.
+supported. The extension ID is `lilt@local`.
 
 Updates require a new login to reload extension JavaScript. Existing PTT settings
 and models migrate on first launch without overwriting lilt files or deleting
@@ -49,12 +57,16 @@ old data. The installer disables the old extension to avoid shortcut conflicts.
 
 All models support **English dictation** and run on the CPU.
 
-| Model | Download | Tradeoff |
-| --- | ---: | --- |
-| Tiny English Q5_1 | 31 MiB | Smallest footprint |
-| Base English Q5_1 | 57 MiB | Faster recognition |
-| Small English Q5_1 | 181 MiB | Default quality/size balance |
-| Medium English Q5_0 | 514 MiB | Larger, slower alternative |
+| Model | Parameters | Download | Tradeoff |
+| --- | ---: | ---: | --- |
+| Tiny English Q5_1 | 39 million | 30.7 MiB | Smallest footprint |
+| Base English Q5_1 | 74 million | 57.0 MiB | Faster recognition |
+| Small English Q5_1 | 244 million | 181.3 MiB | Default quality/size balance |
+| Medium English Q5_0 | 769 million | 514.2 MiB | Larger, slower alternative |
+
+Original weights come from [OpenAI Whisper](https://github.com/openai/whisper#available-models-and-languages).
+The app downloads converted, quantized files from
+[ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp/tree/98aa99a0a9db05ae2342309f5096248665f7cba3).
 
 Downloads use a pinned revision, size, and SHA-256 digest and are installed
 atomically. Download size is not runtime memory. Settings live in

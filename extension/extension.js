@@ -33,6 +33,8 @@ const BUS_XML = `<node><interface name="${BUS_NAME}">
 </interface></node>`;
 const DictationProxy = Gio.DBusProxy.makeProxyWrapper(BUS_XML);
 const ACTIVE = new Set(['loading', 'recording', 'transcribing']);
+const WAVE_HEIGHTS = [6, 12, 17, 21, 23, 21, 17, 12, 6];
+const BAR_WIDTH = 3;
 const MODS = Clutter.ModifierType;
 const SHORTCUT_MODIFIERS = MODS.SHIFT_MASK | MODS.CONTROL_MASK |
     MODS.MOD1_MASK | MODS.SUPER_MASK;
@@ -195,6 +197,9 @@ export default class LiltExtension extends Extension {
         this._pill.destroy();
         this._pill = null;
         this._bars = null;
+        this._wave = null;
+        this._dots = null;
+        this._dotBox = null;
         this._indicator.destroy();
         this._indicator = null;
         this._session = false;
@@ -226,17 +231,54 @@ export default class LiltExtension extends Extension {
             can_focus: true,
             visible: false,
         });
-        const content = new St.BoxLayout({style_class: 'lilt-wave'});
-        this._bars = [6, 12, 17, 21, 23, 21, 17, 12, 6].map(height => {
-            const bar = new St.Widget({
-                style_class: 'lilt-wave-bar',
-                height,
+        const content = new St.Widget({
+            layout_manager: new Clutter.BinLayout(),
+            width: 43, height: 23,
+        });
+        this._wave = new St.BoxLayout({
+            style_class: 'lilt-wave',
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._bars = WAVE_HEIGHTS.map(height => {
+            const bar = new St.DrawingArea({
+                style_class: 'lilt-wave-bar lilt-wave-canvas',
+                height: Math.max(BAR_WIDTH, height * 0.22),
                 y_align: Clutter.ActorAlign.CENTER,
             });
-            bar.set_pivot_point(0.5, 0.5);
-            content.add_child(bar);
+            bar.connect('repaint', () => {
+                const [width, height] = bar.get_surface_size();
+                const radius = width / 2;
+                const color = bar.get_theme_node().get_foreground_color();
+                const context = bar.get_context();
+                context.setSourceRGBA(color.red / 255, color.green / 255,
+                    color.blue / 255, color.alpha / 255);
+                // Keep the exact half-pixel radius at this small size; theme
+                // borders round it down and make a 3 px bar look square.
+                context.arc(radius, height - radius, radius, 0, Math.PI);
+                context.arc(radius, radius, radius, Math.PI, Math.PI * 2);
+                context.closePath();
+                context.fill();
+                context.$dispose();
+            });
+            this._wave.add_child(bar);
             return bar;
         });
+        content.add_child(this._wave);
+        this._dotBox = new St.BoxLayout({
+            style_class: 'lilt-dots', visible: false,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._dots = Array.from({length: 3}, () => {
+            const dot = new St.Widget({
+                style_class: 'lilt-dot',
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            this._dotBox.add_child(dot);
+            return dot;
+        });
+        content.add_child(this._dotBox);
         this._pill.set_child(content);
         this._pill.connect('captured-event', (_actor, event) => this._capture(event));
         this._pill.connect('clicked', () => {
@@ -512,15 +554,16 @@ export default class LiltExtension extends Extension {
         this._recordItem.label.text = recording ? 'Finish dictation' : 'Start dictation';
         this._recordItem.setSensitive(!active || recording);
         this._panelIcon[recording ? 'add_style_class_name' : 'remove_style_class_name']('lilt-panel-recording');
-        this._pill[recording ? 'remove_style_class_name' : 'add_style_class_name']('busy');
         this._pill.accessible_name = recording ? 'Recording. Click to finish dictation.' :
             this._state === 'loading' ? 'Starting dictation. Escape to cancel.' :
                 'Transcribing. Escape to cancel.';
+        this._wave.visible = recording;
+        this._dotBox.visible = active && !recording;
         if (recording) {
-            this._stopPulse();
+            this._stopDots();
             this._drawWave(this._proxy?.Level || 0);
         } else if (active) {
-            this._startPulse();
+            this._startDots();
         } else {
             this._stopWave();
             this._clearDraft();
@@ -533,43 +576,57 @@ export default class LiltExtension extends Extension {
         }
     }
 
-    _drawWave(level, busy = false) {
+    _drawWave(level) {
         const intensity = Math.sqrt(Math.min(1, Math.max(0, level)));
         for (const [index, bar] of this._bars.entries()) {
             // A circular envelope expands with microphone intensity. The bars
             // represent loudness, not invented frequency information.
             const center = 1 - Math.abs(index - 4) / 5;
-            const scale = busy ? 0.40 + intensity * 0.40 :
-                0.22 + intensity * (0.50 + center * 0.28);
-            bar.ease({scale_y: scale, opacity: busy ? 200 : 240,
+            const scale = 0.22 + intensity * (0.50 + center * 0.28);
+            // Resize the geometry so the circular caps retain their radius.
+            // Transform scaling would squash them flat at low microphone levels.
+            bar.ease({height: Math.max(BAR_WIDTH, WAVE_HEIGHTS[index] * scale), opacity: 240,
                 duration: 90, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
         }
     }
 
-    _startPulse() {
-        if (this._pulseSource)
+    _startDots() {
+        if (this._dotSource)
             return;
+        for (const bar of this._bars)
+            bar.remove_all_transitions();
         const started = GLib.get_monotonic_time();
         const draw = () => {
-            const phase = (GLib.get_monotonic_time() - started) / 1000000;
-            this._drawWave(0.35 + 0.30 * Math.sin(phase * Math.PI * 1.5), true);
+            const elapsed = (GLib.get_monotonic_time() - started) / 1000000;
+            for (const [index, dot] of this._dots.entries()) {
+                // Each dot makes one soft hop; the sequence repeats as a wave.
+                const phase = ((elapsed - index * 0.13) % 0.95 + 0.95) % 0.95;
+                const lift = phase < 0.48 ? Math.sin(phase / 0.48 * Math.PI) : 0;
+                dot.translation_y = -4 * lift;
+                dot.opacity = Math.round(155 + 90 * lift);
+            }
         };
         draw();
-        this._pulseSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+        this._dotSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 32, () => {
             draw();
             return GLib.SOURCE_CONTINUE;
         });
     }
 
-    _stopPulse() {
-        if (this._pulseSource) {
-            GLib.source_remove(this._pulseSource);
-            this._pulseSource = 0;
+    _stopDots() {
+        if (this._dotSource) {
+            GLib.source_remove(this._dotSource);
+            this._dotSource = 0;
+        }
+        for (const dot of this._dots ?? []) {
+            dot.remove_all_transitions();
+            dot.translation_y = 0;
+            dot.opacity = 155;
         }
     }
 
     _stopWave() {
-        this._stopPulse();
+        this._stopDots();
         for (const bar of this._bars ?? [])
             bar.remove_all_transitions();
     }

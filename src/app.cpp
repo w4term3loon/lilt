@@ -348,57 +348,97 @@ void App::show() {
     if (!window_) build_ui();
     refresh(); gtk_widget_show_all(window_);
     gtk_widget_set_visible(recovery_, state_ == "error" && !last_transcript_.empty());
-    gtk_window_resize(GTK_WINDOW(window_), 340, 1);
+    gtk_window_resize(GTK_WINDOW(window_), 360, 1);
     gtk_window_present(GTK_WINDOW(window_));
 }
 void App::build_ui() {
     building_ui_ = true;
     window_ = gtk_application_window_new(app_);
     gtk_window_set_title(GTK_WINDOW(window_), "lilt");
-    gtk_window_set_default_size(GTK_WINDOW(window_), 340, 1);
+    gtk_window_set_default_size(GTK_WINDOW(window_), 360, 1);
     gtk_window_set_resizable(GTK_WINDOW(window_), FALSE);
     gtk_window_set_icon_name(GTK_WINDOW(window_), kInterface);
+    gtk_style_context_add_class(gtk_widget_get_style_context(window_), "lilt-preferences");
     auto* header = gtk_header_bar_new();
     gtk_header_bar_set_title(GTK_HEADER_BAR(header), "lilt");
     gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(header), TRUE);
     gtk_window_set_titlebar(GTK_WINDOW(window_), header);
     g_signal_connect(window_, "delete-event", G_CALLBACK(+[](GtkWidget* w, GdkEvent*, gpointer) -> gboolean { gtk_widget_hide(w); return TRUE; }), this);
     auto* css = gtk_css_provider_new();
-    gtk_css_provider_load_from_data(css, ".lilt-status {font-size: 12px;} .lilt-field {font-weight: 600;} ", -1, nullptr);
+    gtk_css_provider_load_from_data(css, R"(
+        .lilt-preferences .lilt-card {
+            background-color: @theme_base_color;
+            border: 1px solid alpha(@theme_fg_color, 0.10);
+            border-radius: 12px;
+            padding: 16px;
+        }
+        .lilt-preferences .lilt-field { font-weight: 500; }
+        .lilt-preferences .lilt-status { font-size: 12px; }
+        .lilt-preferences .lilt-card button {
+            border-radius: 7px;
+            box-shadow: none;
+        }
+        .lilt-preferences .lilt-card button:focus {
+            border-color: #72a98e;
+        }
+        .lilt-preferences switch:checked {
+            background-color: #6eac8b;
+            background-image: none;
+            border-color: #589875;
+        }
+    )", -1, nullptr);
     gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(css);
     auto* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
-    gtk_container_set_border_width(GTK_CONTAINER(box), 24);
+    gtk_container_set_border_width(GTK_CONTAINER(box), 20);
     gtk_container_add(GTK_CONTAINER(window_), box);
     status_label_ = label("", "lilt-status");
     gtk_widget_set_no_show_all(status_label_, TRUE);
-    gtk_widget_set_size_request(status_label_, 288, -1);
+    gtk_widget_set_size_request(status_label_, 308, -1);
+    gtk_widget_set_halign(status_label_, GTK_ALIGN_CENTER);
+    gtk_label_set_xalign(GTK_LABEL(status_label_), 0.5);
+    gtk_label_set_justify(GTK_LABEL(status_label_), GTK_JUSTIFY_CENTER);
     auto* grid = gtk_grid_new();
-    gtk_grid_set_row_spacing(GTK_GRID(grid), 16);
-    gtk_grid_set_column_spacing(GTK_GRID(grid), 22);
-    pack(box, grid, 5);
+    gtk_style_context_add_class(gtk_widget_get_style_context(grid), "lilt-card");
+    gtk_widget_set_halign(grid, GTK_ALIGN_CENTER);
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 12);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 18);
+    auto row = [&](const char* title, GtkWidget* control, int position) {
+        auto* field = label(title, "lilt-field");
+        gtk_widget_set_size_request(field, 72, 36);
+        gtk_widget_set_valign(field, GTK_ALIGN_CENTER);
+        gtk_widget_set_size_request(control, 168, -1);
+        gtk_widget_set_hexpand(control, TRUE);
+        gtk_grid_attach(GTK_GRID(grid), field, 0, position, 1, 1);
+        gtk_grid_attach(GTK_GRID(grid), control, 1, position, 1, 1);
+    };
+    pack(box, grid);
     model_combo_ = gtk_combo_box_text_new();
     const char* ids[] = {"tiny.en-q5_1", "base.en-q5_1", "small.en-q5_1", "medium.en-q5_0"};
     const char* titles[] = {"Tiny", "Base", "Small", "Medium"};
     for (int i = 0; i < 4; ++i) gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(model_combo_), ids[i], titles[i]);
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(model_combo_), model_.c_str());
-    gtk_grid_attach(GTK_GRID(grid), label("Model", "lilt-field"), 0, 0, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), model_combo_, 1, 0, 1, 1);
+    GList* cells = gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(model_combo_));
+    for (GList* cell = cells; cell; cell = cell->next) g_object_set(cell->data, "xalign", 0.5f, nullptr);
+    g_list_free(cells);
+    auto* model_controls = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    pack(model_controls, model_combo_);
     download_button_ = gtk_button_new_with_label("Download model");
     gtk_widget_set_no_show_all(download_button_, TRUE);
-    gtk_grid_attach(GTK_GRID(grid), download_button_, 1, 1, 1, 1);
+    pack(model_controls, download_button_);
+    row("Model", model_controls, 0);
     shortcut_button_ = gtk_button_new();
-    gtk_grid_attach(GTK_GRID(grid), label("Start", "lilt-field"), 0, 2, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), shortcut_button_, 1, 2, 1, 1);
+    row("Start", shortcut_button_, 1);
     finish_button_ = gtk_button_new();
-    gtk_grid_attach(GTK_GRID(grid), label("Finish", "lilt-field"), 0, 3, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), finish_button_, 1, 3, 1, 1);
+    row("Finish", finish_button_, 2);
     preview_switch_ = gtk_switch_new();
     gtk_switch_set_active(GTK_SWITCH(preview_switch_), live_preview_);
-    gtk_widget_set_halign(preview_switch_, GTK_ALIGN_START);
+    gtk_widget_set_halign(preview_switch_, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(preview_switch_, GTK_ALIGN_CENTER);
     gtk_widget_set_tooltip_text(preview_switch_, "Show text while you speak.");
-    gtk_grid_attach(GTK_GRID(grid), label("Live text", "lilt-field"), 0, 4, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), preview_switch_, 1, 4, 1, 1);
+    auto* preview_control = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_box_pack_start(GTK_BOX(preview_control), preview_switch_, TRUE, TRUE, 0);
+    row("Live text", preview_control, 3);
     pack(box, status_label_);
     recovery_ = label(""); gtk_label_set_selectable(GTK_LABEL(recovery_), TRUE);
     gtk_widget_set_no_show_all(recovery_, TRUE); pack(box, recovery_);

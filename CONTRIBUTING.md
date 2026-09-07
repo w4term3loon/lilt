@@ -3,6 +3,10 @@
 Build dependencies and user setup are in the [README](README.md). Keep audio and
 recognition in the native application and desktop integration in the extension.
 The [extension reference](extension/README.md) describes the D-Bus contract.
+Use the [project repository](https://github.com/w4term3loon/lilt) for changes and
+reports, and the [roadmap](docs/roadmap.md) for planned work and acceptance criteria.
+Build from a clean clone using relative project paths; keep private recordings,
+settings, model weights, and diagnostic captures outside version control.
 
 ## Tests
 
@@ -38,6 +42,12 @@ python3 tests/test_packaging.py --archives dist
 CI runs these core, desktop, and archive checks. For changes, describe the problem,
 resulting behavior, and relevant verification. Add focused regressions for real
 bugs; avoid tests of unused code and duplicated integration scenarios.
+
+Inspect recording bars at low and high volume and the three finalization dots
+when changing indicator styling. Check preferences in light and dark themes.
+Inline draft appearance needs a real destination-field check: GTK IBus honors
+the green foreground and disabled underline, while other input paths may impose
+their own composition style.
 
 ## Installation paths
 

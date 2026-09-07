@@ -8,6 +8,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 export default class Driver extends Extension {
     enable() {
         this.timers = new Set();
+        this.frames = {};
         GLib.file_set_contents(GLib.build_filenamev([GLib.getenv('LILT_SMOKE_ROOT'), 'display.json']),
             JSON.stringify({DISPLAY: GLib.getenv('DISPLAY'), XAUTHORITY: GLib.getenv('XAUTHORITY')}));
         this.later(3500, () => this.run());
@@ -27,8 +28,14 @@ export default class Driver extends Extension {
             'io.github.lilt.TestEntry', method,
             signature ? new GLib.Variant(signature, args) : null, null,
             Gio.DBusCallFlags.NONE, 3000, null, (connection, result) => {
-                try { connection.call_finish(result); }
-                catch (error) { console.error(`LILT TEST FIXTURE ERROR ${error.message}`); }
+                try {
+                    connection.call_finish(result);
+                    if (method === 'Snapshot' && args[0] === 'target-closed')
+                        GLib.file_set_contents(GLib.build_filenamev([
+                            GLib.getenv('LILT_SMOKE_ROOT'), 'complete']), 'true');
+                } catch (error) {
+                    console.error(`LILT TEST FIXTURE ERROR ${error.message}`);
+                }
             });
     }
 
@@ -73,15 +80,24 @@ export default class Driver extends Extension {
             console.log(`LILT TEST INLINE composition=${!!this.lilt._composition} grab=${!!this.lilt._grab}`);
             this.snapshot('draft');
             this.capture('recording');
-            this.recordingScale = this.lilt._bars[4].scale_y;
+            this.recordingHeight = this.lilt._bars[4].height;
+            const rounded = this.lilt._bars.every(bar =>
+                bar.scale_y === 1 && bar.height >= bar.width && bar.height <= 23);
+            console.log(`LILT TEST CAPS unscaled=${rounded}`);
         });
         this.later(850, () => {
             this.snapshot('revised');
-            console.log(`LILT TEST LEVEL changed=${Math.abs(this.recordingScale - this.lilt._bars[4].scale_y) > 0.02}`);
+            console.log(`LILT TEST LEVEL changed=${Math.abs(this.recordingHeight - this.lilt._bars[4].height) > 0.4}`);
         });
         this.later(900, () => this.key(Clutter.KEY_Control_L, true));
         this.later(1000, () => this.key(Clutter.KEY_F8, true));
-        this.later(1150, () => this.capture('transcribing'));
+        this.later(1050, () => { this.dotPositions = this.lilt._dots.map(dot => dot.translation_y); });
+        this.later(1150, () => {
+            this.capture('transcribing');
+            const changed = this.lilt._dots.some((dot, index) =>
+                Math.abs(dot.translation_y - this.dotPositions[index]) > 0.2);
+            console.log(`LILT TEST DOTS visible=${this.lilt._dotBox.visible} wave=${this.lilt._wave.visible} count=${this.lilt._dots.length} moving=${changed}`);
+        });
         this.later(1700, () => { this.logHeld('HELD'); this.snapshot('held'); });
         this.later(1900, () => this.key(Clutter.KEY_F8, false));
         this.later(2050, () => { this.logHeld('MODIFIER'); this.snapshot('modifier'); });
@@ -133,11 +149,24 @@ export default class Driver extends Extension {
     }
 
     logFinished(label) {
-        console.log(`LILT TEST ${label} grab=${!!this.lilt._grab} session=${this.lilt._session} inserting=${this.lilt._inserting} pulse=${!!this.lilt._pulseSource}`);
+        console.log(`LILT TEST ${label} grab=${!!this.lilt._grab} session=${this.lilt._session} inserting=${this.lilt._inserting} dots=${!!this.lilt._dotSource} resting=${this.lilt._dots.every(dot => dot.translation_y === 0)}`);
     }
 
     async capture(label) {
         try {
+            const bounds = actor => {
+                const [x, y] = actor.get_transformed_position();
+                const [width, height] = actor.get_transformed_size();
+                return {x, y, width, height};
+            };
+            this.frames[label] = {
+                stageWidth: global.stage.width,
+                bars: this.lilt._bars.map(bounds),
+                dots: this.lilt._dots.map(bounds),
+            };
+            GLib.file_set_contents(GLib.build_filenamev([
+                GLib.getenv('LILT_SMOKE_ROOT'), 'indicator-frames.json']),
+                JSON.stringify(this.frames));
             const filename = GLib.build_filenamev([GLib.getenv('LILT_SMOKE_ROOT'), `${label}.png`]);
             const stream = Gio.File.new_for_path(filename).replace(null, false, Gio.FileCreateFlags.NONE, null);
             await new Shell.Screenshot().screenshot(false, stream);

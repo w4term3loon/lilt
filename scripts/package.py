@@ -47,6 +47,8 @@ def read_cache(build):
 def validate_binary(binary, build):
     if not binary.is_file():
         raise ValueError('Build first: ./scripts/build.sh')
+    if str(Path.home()).encode() + b'/' in binary.read_bytes():
+        raise ValueError('Release executable contains a private home path; rebuild with the current CMake configuration')
     cache = read_cache(build)
     if cache.get('CMAKE_BUILD_TYPE') != 'Release':
         raise ValueError('Release archives require CMAKE_BUILD_TYPE=Release')

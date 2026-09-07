@@ -339,16 +339,16 @@ export class Composition {
         const parts = compositionParts(text, stableBytes);
         const content = parts.stable + parts.tentative;
         const length = [...content].length;
-        const stable = [...parts.stable].length;
         const preedit = IBus.Text.new_from_string(content);
         // Attribute ranges are Unicode character indices, never UTF-8 bytes or
-        // JavaScript UTF-16 offsets. GNOME's Wayland path may retain only the
-        // composition underline; IBus clients can also display the muted tail.
-        if (length)
+        // JavaScript UTF-16 offsets. Explicit NONE suppresses the default
+        // underline in IBus clients that honor styling. GNOME 46's native
+        // Wayland path strips attributes, and clients may impose their own.
+        if (length) {
             preedit.append_attribute(IBus.AttrType.UNDERLINE,
-                IBus.AttrUnderline.SINGLE, 0, length);
-        if (stable < length)
-            preedit.append_attribute(IBus.AttrType.FOREGROUND, 0x808080, stable, length);
+                IBus.AttrUnderline.NONE, 0, length);
+            preedit.append_attribute(IBus.AttrType.FOREGROUND, 0x4f805f, 0, length);
+        }
         session.engine.update_preedit_text_with_mode(preedit, length, length > 0,
             IBus.PreeditFocusMode.CLEAR);
     }

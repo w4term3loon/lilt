@@ -11,8 +11,13 @@ and preferences; no inference runs in GNOME Shell.
 Live sessions register a temporary IBus engine on a separate connection to the
 existing daemon. The engine displays the complete draft as uncommitted preedit
 text inside the focused field. Stable-prefix offsets arrive in UTF-8 bytes;
-IBus attributes use Unicode character indices. The application controls how
-underline and tentative-text color appear.
+IBus attributes use Unicode character indices. The engine requests muted green
+text with no underline for the whole draft. The destination controls the final
+appearance: GNOME 46's native Wayland path drops these styling attributes, so
+some applications retain their own composition underline.
+
+The small recording indicator uses rounded bars that respond to the audio
+level. Three bouncing dots replace the bars while recognition finishes.
 
 Finish commits one sanitized paragraph after all held keys and modifiers are
 released. Escape, focus loss, input-source changes, and destination closure

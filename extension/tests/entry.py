@@ -73,6 +73,7 @@ def method(conn, sender, path, iface, name, args, call):
             current = ibus.get_global_engine()
             counts['snapshots'][values[0]] = {
                 'text': entry.get_text(), 'preedit': preedit,
+                'layout_attributes': entry.get_layout().get_attributes().to_string(),
                 'selection': entry.get_selection_bounds(),
                 'other_text': other_entry.get_text(),
                 'engine': current.get_name() if current else None,

@@ -2,8 +2,9 @@
   "uuid": "lilt@local",
   "name": "lilt",
   "description": "Local voice dictation: a shortcut, a small recording indicator, and direct text insertion.",
+  "url": "https://github.com/w4term3loon/lilt",
   "shell-version": ["46"],
   "settings-schema": "org.gnome.shell.extensions.lilt",
-  "version": 6,
-  "version-name": "0.5.0"
+  "version": 9,
+  "version-name": "0.5.1"
 }
