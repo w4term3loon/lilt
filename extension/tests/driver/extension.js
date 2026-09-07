@@ -9,7 +9,6 @@ export default class Driver extends Extension {
     enable() {
         this.timers = new Set();
         this.frames = {};
-        this.recordings = 0;
         // GTK must discover a keyboard-capable Wayland seat when it connects.
         // A headless CI compositor can have no physical input devices at all.
         this.keyboard = Clutter.get_default_backend().get_default_seat()
@@ -62,26 +61,8 @@ export default class Driver extends Extension {
             return;
         }
         Main.overview.hide();
-        this.keyCounts = {press: 0, release: 0, consumed: 0, sample: []};
-        this.originalCapture = this.lilt._capture;
-        this.captureProbe = event => {
-            const type = event.type();
-            const result = this.originalCapture.call(this.lilt, event);
-            if (type === Clutter.EventType.KEY_PRESS || type === Clutter.EventType.KEY_RELEASE) {
-                const direction = type === Clutter.EventType.KEY_PRESS ? 'press' : 'release';
-                this.keyCounts[direction]++;
-                this.keyCounts.consumed += Number(result === Clutter.EVENT_STOP);
-                if (this.keyCounts.sample.length < 6)
-                    this.keyCounts.sample.push([direction, event.get_key_symbol()]);
-            }
-            return result;
-        };
-        this.lilt._capture = this.captureProbe;
         this.later(250, () => this.prepare());
-        this.later(400, () => {
-            this.logRoute('before-start');
-            this.snapshot('before-start');
-        });
+        this.later(400, () => this.snapshot('before-start'));
         this.later(500, () => this.exercise().catch(error => {
             console.error(`LILT TEST FIXTURE ERROR ${error.message}`);
         }));
@@ -92,14 +73,10 @@ export default class Driver extends Extension {
         const deadline = GLib.get_monotonic_time() + 5 * 1000000;
         while (this.lilt._state !== 'recording' || this.lilt._preparing ||
             !this.lilt._latestPartial?.text) {
-            if (GLib.get_monotonic_time() >= deadline) {
-                this.logRoute('readiness-timeout');
+            if (GLib.get_monotonic_time() >= deadline)
                 throw new Error(`Recording did not become ready: state=${this.lilt._state}, preparing=${this.lilt._preparing}, composition=${!!this.lilt._composition}, draft=${!!this.lilt._latestPartial?.text}`);
-            }
             await this.pause(25);
         }
-        if (++this.recordings === 1)
-            this.logRoute('recording');
     }
 
     pause(ms) {
@@ -122,7 +99,6 @@ export default class Driver extends Extension {
         step(600, () => {
             console.log(`LILT TEST WRONG KEYS state=${this.lilt._state}`);
             console.log(`LILT TEST INLINE composition=${!!this.lilt._composition} grab=${!!this.lilt._grab}`);
-            this.logRoute('draft');
             this.snapshot('draft');
             this.capture('recording');
             this.recordingHeight = this.lilt._bars[4].height;
@@ -206,36 +182,6 @@ export default class Driver extends Extension {
         console.log(`LILT TEST ${label} grab=${!!this.lilt._grab} session=${this.lilt._session} inserting=${this.lilt._inserting} dots=${!!this.lilt._dotSource} resting=${this.lilt._dots.every(dot => dot.translation_y === 0)}`);
     }
 
-    logRoute(label) {
-        // GNOME 46's inputMethod.js bypasses IBus without a context or current
-        // source. Engine readiness alone cannot describe that Wayland bridge.
-        const input = Main.inputMethod;
-        const source = value => value ? `${value.type}:${value.id}` : null;
-        const engine = value => value?.startsWith('lilt-dictation-') ? 'lilt-dictation' : value ?? null;
-        console.log(`LILT TEST ROUTE ${label} ${JSON.stringify({
-            context: input?._context?.get_object_path() ?? null,
-            focus: !!input?.currentFocus,
-            source: source(input?._currentSource),
-            managerSource: source(input?._inputSourceManager.currentSource),
-            preeditLength: input?._preeditStr?.length ?? 0,
-            preeditVisible: !!input?._preeditVisible,
-            busConnected: !!input?._ibus?.is_connected(),
-            ibusReady: !!this.lilt._ibus?._ready,
-            engine: engine(this.lilt._ibus?._currentEngineName),
-        })}`);
-        const session = this.lilt._composition?._session;
-        if (session) {
-            console.log(`LILT TEST SESSION ${label} ${JSON.stringify({
-                state: this.lilt._state, preparing: this.lilt._preparing,
-                original: session.originalContext, focused: session.focusedContext,
-                capabilities: session.capabilities, ready: session.ready,
-                closing: session.closing, cancelled: session.cancelled,
-                previousEngine: engine(session.previousEngine),
-            })}`);
-            console.log(`LILT TEST KEYS ${label} ${JSON.stringify(this.keyCounts)}`);
-        }
-    }
-
     async capture(label) {
         try {
             const bounds = actor => {
@@ -282,8 +228,6 @@ export default class Driver extends Extension {
         for (const timer of this.timers)
             GLib.source_remove(timer);
         this.timers.clear();
-        if (this.captureProbe && this.lilt?._capture === this.captureProbe)
-            this.lilt._capture = this.originalCapture;
         this.keyboard?.run_dispose();
     }
 }

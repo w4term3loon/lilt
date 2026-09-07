@@ -154,3 +154,86 @@ assert(nextPanel.signals.size === 3, 'Watch the replacement IBus panel after rec
 panelInstance._disconnectIbusPanel();
 assert(nextPanel.signals.size === 0, 'Disable must disconnect all surviving IBus panel handlers');
 print('IBus panel destruction, reconnection, and handler cleanup regressions passed');
+
+const compositionSource = imports.byteArray.toString(GLib.file_get_contents(
+    GLib.build_filenamev([GLib.path_get_dirname(path), 'composition.js']))[1])
+    .replace(/^import .*;$/gm, '').replace('export class Composition', 'class Composition');
+
+async function checkCompositionContext(number) {
+    const context = `/org/freedesktop/IBus/InputContext_${number}`;
+    const calls = [];
+    const signals = new Set();
+    let closed = false;
+    let factories = 0;
+    const connection = {
+        connect(name) { signals.add(name); return name; },
+        disconnect(name) { signals.delete(name); },
+        is_closed() { return closed; },
+        close(_cancellable, callback) { closed = true; callback(this, null); },
+        close_finish() {},
+        call(_destination, _path, _interface, method, parameters,
+            _replyType, _flags, _timeout, _cancellable, callback) {
+            assert(method === 'Get', 'Invalid focus must not register or switch an engine');
+            const name = parameters.get_child_value(1).get_string()[0];
+            calls.push(name);
+            const properties = {
+                CurrentInputContext: new GLib.Variant('o', context),
+                GlobalEngine: new GLib.Variant('(sss)', ['IBusEngineDesc', '', 'xkb:us::eng']),
+                EmbedPreeditText: new GLib.Variant('b', true),
+            };
+            assert(name in properties, 'Unexpected IBus property');
+            callback(this, new GLib.Variant('(v)', [properties[name]]));
+        },
+        call_finish(result) { return result; },
+    };
+    const compositionGio = {
+        ...Gio,
+        DBusConnectionFlags: imports.gi.Gio.DBusConnectionFlags,
+        DBusConnection: {
+            new_for_address(_address, _flags, _observer, _cancellable, callback) {
+                callback(null, connection);
+            },
+            new_for_address_finish(result) { return result; },
+        },
+    };
+    const accepted = 'Accepted real context; stop before engine registration';
+    const compositionIBus = {
+        get_address: () => 'test:isolated',
+        Factory: {new() { factories++; throw new Error(accepted); }},
+    };
+    const TestComposition = new Function('Gio', 'GLib', 'IBus',
+        compositionSource + '\nreturn Composition;')(compositionGio, GLib, compositionIBus);
+    const composition = new TestComposition({});
+    let error = null;
+    try {
+        await composition.begin();
+    } catch (failure) {
+        error = failure;
+    }
+    assert(error?.message === (number === 1 ? 'Focus an editable text field and try again.' : accepted),
+        `Wrong startup result for InputContext_${number}: ${error?.message}`);
+    assert(factories === (number === 1 ? 0 : 1), 'Reject fallback focus before creating an engine factory');
+    assert(calls.join() === (number === 1 ? 'CurrentInputContext' :
+        'CurrentInputContext,GlobalEngine,EmbedPreeditText'), 'Reject fallback focus before engine lookup');
+    assert(closed && signals.size === 0 && composition._session === null,
+        'Rejected startup must close its connection, disconnect signals, and release the session');
+}
+
+const compositionLoop = new GLib.MainLoop(null, false);
+let compositionFailure = null;
+let compositionTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, () => {
+    compositionTimeout = 0;
+    compositionFailure = new Error('Composition startup regression timed out');
+    compositionLoop.quit();
+    return GLib.SOURCE_REMOVE;
+});
+(async () => {
+    for (const number of [1, 10, 11])
+        await checkCompositionContext(number);
+})().catch(error => { compositionFailure = error; }).finally(() => compositionLoop.quit());
+compositionLoop.run();
+if (compositionTimeout)
+    GLib.source_remove(compositionTimeout);
+if (compositionFailure)
+    throw compositionFailure;
+print('IBus fallback focus rejection, valid context suffixes, and startup cleanup regressions passed');

@@ -172,9 +172,13 @@ export class Composition {
 
             session.originalContext = (await property(session.connection,
                 'CurrentInputContext')).get_string()[0];
+            this._check(session);
+            // GNOME also ignores IBus's fallback context: it is not a text field.
+            if (!session.originalContext || session.originalContext.endsWith('/InputContext_1'))
+                throw new Error('Focus an editable text field and try again.');
             session.previousEngine = await engineName(session.connection);
             this._check(session);
-            if (!session.originalContext || !session.previousEngine ||
+            if (!session.previousEngine ||
                 session.previousEngine.startsWith('lilt-dictation-'))
                 throw new Error('Focus an editable text field and try again.');
             const embedded = await property(session.connection, 'EmbedPreeditText');

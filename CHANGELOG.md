@@ -2,6 +2,7 @@
 
 ## 0.5.1
 
+- Reject IBus's unfocused fallback context before starting live dictation.
 - Restore the compact, centered preferences layout with Model, Start, Finish,
   and Live text controls.
 - Keep recording bars visible with cached or current styles, with rounded ends

@@ -13,8 +13,8 @@ future work, not claims that the features exist. Check items after verification.
   private recordings, transcripts, settings, credentials, and machine-specific
   paths out of Git. Include only deliberately prepared synthetic documentation
   images; exclude build products and model files from the source repository.
-- [ ] Publish to [w4term3loon/lilt](https://github.com/w4term3loon/lilt), verify the
-  pushed revision, and confirm the first hosted CI run and its release artifacts.
+- [x] Publish to [w4term3loon/lilt](https://github.com/w4term3loon/lilt), verify the
+  pushed revision, and confirm successful hosted CI and its release artifacts.
 
 ## 1. Compare Base and Small on representative dictation
 
