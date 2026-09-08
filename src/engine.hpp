@@ -2,7 +2,6 @@
 #pragma once
 
 #include <functional>
-#include <array>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -19,7 +18,7 @@ class Engine {
 public:
     struct Callbacks {
         std::function<void(std::string, std::string)> on_state;
-        std::function<void(double, std::array<double, 3>)> on_level; // RMS and low/mid/high bands.
+        std::function<void(double)> on_level; // Microphone RMS.
         // Actual active source, including device/stream mute or zero input volume.
         std::function<void(std::string, bool)> on_microphone;
         std::function<void(std::string)> on_result;

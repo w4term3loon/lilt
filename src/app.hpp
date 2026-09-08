@@ -29,7 +29,6 @@ private:
     std::string finish_shortcut_ = "Return";
     std::string state_ = "idle", message_ = "Ready", shell_owner_, last_transcript_;
     double level_ = 0;
-    std::array<double, 3> bands_{};
     bool building_ui_ = false, live_preview_ = true;
     bool microphone_muted_ = false, heard_input_ = false;
     unsigned quiet_levels_ = 0;

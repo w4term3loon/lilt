@@ -1,6 +1,6 @@
 # Third-party notices
 
-ren's original source is licensed under **GPL-3.0-or-later**. Third-party
+Ren's original source is licensed under **GPL-3.0-or-later**. Third-party
 components retain their own licenses and copyright notices.
 
 ## whisper.cpp and ggml

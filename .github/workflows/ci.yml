@@ -23,5 +23,5 @@ jobs:
             pkg-config libgtk-3-dev libpulse-dev python3 gjs
       - name: Build and check
         run: ./scripts/build.sh
-      - name: Check installer syntax
+      - name: Check Python syntax
         run: python3 -m compileall -q scripts

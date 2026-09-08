@@ -1,67 +1,115 @@
-# Ren
+<p align="center">
+  <img src="docs/wren.gif" width="160" height="112" alt="A small wren chirping, then resting.">
+</p>
 
-Local English voice typing for Ubuntu 24.04 / GNOME 46 on x86-64.
+<h1 align="center">Ren</h1>
+<p align="center">Local voice typing for GNOME.</p>
 
-Press **Ctrl + Super + Space**, speak, then **Enter** to finish or **Escape** to
-cancel. Drafts appear in the focused field; finishing inserts text without
-sending it. The top-bar menu opens preferences for Model, Start, Finish, and
-Live text. Without a supported text field, finished dictation goes to the clipboard.
+Ren turns speech into text in the focused application. Recognition runs on your
+CPU, with a small particle indicator that responds to your voice.
 
-Start with **“open browser”** to launch or focus your default browser automatically.
-The command stays out of the text field; the particles expand in purple, then disappear.
-Live recognition runs with Live text off too; that switch only hides inline drafts.
-
-The cloud stays in the bottom-right corner, clear of panels and docks. Click it to finish.
-**Copy last dictation** in the tray recovers the last completed text until the next
-recording or Quit. Microphone warnings offer **Open Sound Settings** when input is
-muted or very quiet.
-
-Audio stays in memory. No cloud transcription or recording history.
-Models download once, then work offline. Recordings are limited to three minutes.
-Model weights stay ready for five minutes after use, then leave memory.
+**Ubuntu 24.04 · GNOME Shell 46 · x86-64 · English**
 
 ## Install
 
+Build and install from source:
+
 ```bash
-sudo apt install build-essential git cmake pkg-config libgtk-3-dev libpulse-dev python3 gjs gir1.2-ibus-1.0
+sudo apt install build-essential git cmake pkg-config libgtk-3-dev libpulse-dev \
+  python3 gjs gir1.2-ibus-1.0 libglib2.0-bin
 git clone https://github.com/w4term3loon/ren.git
 cd ren
 ./scripts/build.sh -DGGML_NATIVE=ON
 python3 scripts/install.py
 ```
 
-Log out and back in to load the extension, then download a model in Preferences.
-Existing Lilt settings and downloaded models are imported automatically.
+Log out and back in to load the extension. Open **Preferences** from the wren
+in the top bar, then download a model. The installer sets up both the native app
+and the GNOME extension; both are required.
+
+To update, pull the latest source and repeat the build and install steps, then
+log in again. Existing Lilt settings and models are imported without removing
+old data.
+
+## Use
+
+Focus a text field, then:
+
+| Action | Shortcut |
+| --- | --- |
+| Start dictation | **Ctrl + Super + Space** |
+| Finish and insert | **Enter**, the Start shortcut again, or click the indicator |
+| Discard | **Escape** |
+
+Finishing inserts text without submitting the field. **Live text** shows a draft
+as you speak; turning it off hides drafts while recognition continues. Changing
+focus during dictation cancels text insertion. If the field cannot accept
+composition, Ren copies the finished text to the clipboard and notifies you.
+
+Start with **“open browser”** to launch or focus your default browser immediately.
+This is a voice command: it ends dictation and keeps the phrase out of the field.
+
+Preferences contains the model, shortcuts, Live text, and optional **Vocabulary**
+hints for names and terms. **Copy last dictation** in the top-bar menu recovers
+the latest result until the next recording or Quit. Microphone warnings link to
+Ubuntu Sound settings.
 
 ## Models
 
-| English model | Parameters | Download |
-| --- | ---: | ---: |
-| Tiny Q5_1 | 39M | 31 MiB |
-| Base Q5_1 | 74M | 57 MiB |
-| Small Q5_1 (default) | 244M | 181 MiB |
-| Medium Q5_0 | 769M | 514 MiB |
+| Model | Download |
+| --- | ---: |
+| Tiny English Q5_1 | 31 MiB |
+| Base English Q5_1 | 57 MiB |
+| Small English Q5_1 — default | 181 MiB |
+| Medium English Q5_0 | 514 MiB |
 
-[OpenAI Whisper](https://github.com/openai/whisper) weights run locally through
-[whisper.cpp](https://github.com/ggml-org/whisper.cpp). Quantized downloads come
-from [ggerganov](https://huggingface.co/ggerganov/whisper.cpp) and are checksum verified.
-Choose Base for speed or Small for accuracy. **Model details** shows the file size and source.
-Choose **Custom file…** to use a local whisper.cpp GGML model; compatibility is checked
-when loaded. Custom files stay in their original location.
-The optional **Vocabulary** field adds local recognition hints for names and terms
-(up to 512 characters). Hints can improve spelling; they do not train the model.
+[Whisper](https://github.com/openai/whisper) runs through
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp). Model downloads use a pinned
+[ggerganov revision](https://huggingface.co/ggerganov/whisper.cpp/tree/98aa99a0a9db05ae2342309f5096248665f7cba3)
+and are verified with SHA-256. **Model details** shows the size and source.
 
-The cloud listens, the ring processes, and purple expansion recognizes a command.
-On completion, the ring gathers into one dot and fades. Clipboard output also shows a notification.
-Ren respects Ubuntu’s animation setting.
+**Custom file…** accepts a local whisper.cpp GGML model and leaves it in its
+original location. Compatibility is checked on load. Vocabulary hints affect
+recognition only; they do not train the model.
 
-## Project
+## Privacy and limits
 
-`src/` contains the C++ app; `extension/` handles GNOME input and the indicator.
-`scripts/` builds and installs; `tests/` holds two focused checks.
-See the [short roadmap](docs/roadmap.md) for remaining work.
+Audio stays in memory. Ren keeps no recording history and sends no audio for
+transcription. Downloads contact Hugging Face; dictation then works offline.
+The latest transcript is held in memory for recovery. Clipboard copies follow
+your desktop's clipboard retention settings.
 
-Uninstall with `python3 ~/.local/share/ren/uninstall.py`; add `--purge-data` to
-remove settings and models too.
+Recordings are limited to three minutes. Model weights stay ready for five
+minutes after use, then leave memory. Settings live in `~/.config/ren`; downloaded
+models live in `~/.local/share/ren/models`, respecting XDG overrides.
+
+Only the platform listed above is supported. Text insertion depends on the
+application's input-method support; test your usual applications before relying
+on it. Recognition can make mistakes, especially with background noise. Review
+text before sending it. The indicator respects GNOME's animation setting.
+
+## Development
+
+`src/` contains the native app; `extension/` handles GNOME input and the indicator.
+`./scripts/build.sh` builds and runs three focused checks: the engine and
+migration, text handling, and the install/uninstall lifecycle. Fresh builds use
+portable CPU instructions; `-DGGML_NATIVE=ON` tunes for the current computer.
+CMake remembers build options between runs.
+
+Before a release, check dictation, cancellation, focus changes, clipboard fallback,
+and extension disable/re-enable in a GNOME 46 session. Automated checks do not
+measure transcription accuracy or establish compatibility with every application.
+Report bugs through [GitHub Issues](https://github.com/w4term3loon/ren/issues),
+including the Ren/GNOME versions, session type, target application, and steps to
+reproduce. Add focused regression tests for bugs; keep new dependencies justified.
+
+## Remove
+
+```bash
+python3 ~/.local/share/ren/uninstall.py
+```
+
+Add `--purge-data` to remove Ren's settings and downloaded models. Legacy data and
+custom models outside Ren's data directory remain untouched.
 
 [GPL-3.0-or-later](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)

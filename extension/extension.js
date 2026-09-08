@@ -12,7 +12,6 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import {insertionText, isBrowserCommand, isBrowserCommandPreview, startsBrowserCommand} from './text.js';
 import {Composition} from './composition.js';
 import {drawOrb, sampleOrb, voiceIntensity} from './orb.js';
@@ -27,7 +26,6 @@ const BUS_XML = `<node><interface name="${BUS_NAME}">
     <method name="ReportError"><arg type="s" direction="in" name="message"/></method>
     <property name="State" type="s" access="read"/>
     <property name="Level" type="d" access="read"/>
-    <property name="Bands" type="ad" access="read"/>
     <property name="Message" type="s" access="read"/>
     <property name="Shortcut" type="s" access="read"/>
     <property name="FinishShortcut" type="s" access="read"/>
@@ -140,10 +138,6 @@ export default class RenExtension extends Extension {
         this._monitorSignal = Main.layoutManager.connect('monitors-changed',
             () => this._positionPill());
 
-        this._ibus = IBusManager.getIBusManager();
-        this._ibusReadySignal = this._ibus.connect('ready', () => this._watchIbusPanel());
-        this._watchIbusPanel();
-
         // Stay idle at login, but allow the first action (and actions after Quit)
         // to activate the service. DO_NOT_AUTO_START would also block those calls.
         this._proxy = new DictationProxy(Gio.DBus.session, BUS_NAME, BUS_PATH,
@@ -162,7 +156,7 @@ export default class RenExtension extends Extension {
                 this._transcriptSignal = proxy.connectSignal('Transcript',
                     (_proxy, _sender, [text]) => this._receiveTranscript(text));
                 this._partialSignal = proxy.connectSignal('PartialTranscript',
-                    (_proxy, _sender, [text, stableBytes]) => this._receivePartial(text, stableBytes));
+                    (_proxy, _sender, [text]) => this._receivePartial(text));
                 this._ownerChanged();
             }, this._cancellable, Gio.DBusProxyFlags.DO_NOT_AUTO_START_AT_CONSTRUCTION);
     }
@@ -182,15 +176,12 @@ export default class RenExtension extends Extension {
         // Detach cancels any active native session. Do not reactivate a stopped service.
         if (this._proxyReady && this._proxy.g_name_owner)
             this._proxy.call('Detach', null, Gio.DBusCallFlags.NO_AUTO_START, 1000, null, null);
-        this._stopWave();
+        this._stopOrb();
         for (const source of this._sources)
             GLib.source_remove(source);
         this._sources.clear();
         this._releaseGrab();
         this._clearTarget();
-        this._disconnectIbusPanel();
-        this._ibus.disconnect(this._ibusReadySignal);
-        this._ibus = null;
         if (this._transcriptSignal)
             this._proxy.disconnectSignal(this._transcriptSignal);
         if (this._partialSignal)
@@ -208,15 +199,15 @@ export default class RenExtension extends Extension {
         this._motionSettings.disconnect(this._motionSignal);
         this._motionSettings = null;
         this._settings.disconnect(this._settingsSignal);
-        Main.wm.removeKeybinding('toggle-shortcut');
+        if (this._shortcutBound)
+            Main.wm.removeKeybinding('toggle-shortcut');
+        this._shortcutBound = false;
         this._settings = null;
         Main.layoutManager.disconnect(this._monitorSignal);
         Main.layoutManager.removeChrome(this._pill);
         this._pill.destroy();
         this._pill = null;
         this._wave = null;
-        this._dots = null;
-        this._dotBox = null;
         this._indicator.destroy();
         this._indicator = null;
         this._session = false;
@@ -270,9 +261,9 @@ export default class RenExtension extends Extension {
             const motion = this._motionSettings.get_boolean('enable-animations');
             const now = GLib.get_monotonic_time();
             if (!this._feedback) {
-                this._orbFrame = sampleOrb(motion ? this._orbBands : [0, 0, 0],
+                this._orbFrame = sampleOrb(motion ? this._orbLevel : 0,
                     motion ? (now - this._orbStarted) / 1000000 : 0,
-                    this._orbCommandMix, this._orbLoadingMix, motion ? this._orbBands[3] : 0);
+                    this._orbCommandMix, this._orbLoadingMix);
             }
             const frame = this._feedback ? this._feedbackFrame : this._orbFrame;
             const completion = this._feedback ? (motion ? (now - this._feedbackStarted) / 1000000 : 0.35) : null;
@@ -292,7 +283,9 @@ export default class RenExtension extends Extension {
     }
 
     _bindShortcut() {
-        Main.wm.removeKeybinding('toggle-shortcut');
+        if (this._shortcutBound)
+            Main.wm.removeKeybinding('toggle-shortcut');
+        this._shortcutBound = false;
         if (!this._enabled || (this._session && this._sessionLive))
             return;
         const action = Main.wm.addKeybinding('toggle-shortcut', this._settings,
@@ -301,7 +294,8 @@ export default class RenExtension extends Extension {
             // method receives Start and can track every finishing key release.
             Shell.ActionMode.NORMAL,
             () => this._toggle());
-        if (action === Meta.KeyBindingAction.NONE)
+        this._shortcutBound = action !== Meta.KeyBindingAction.NONE;
+        if (!this._shortcutBound)
             this._error('ren could not register this shortcut. Choose another in Preferences.');
     }
 
@@ -393,17 +387,17 @@ export default class RenExtension extends Extension {
             return false;
         this._feedback = '';
         this._feedbackFrame = null;
-        this._stopWave();
+        this._stopOrb();
         this._clearTarget();
         this._target = global.display.focus_window;
         this._targetSignal = this._target?.connect('unmanaged', () => {
             this._targetSignal = 0;
             this._target = null;
-            if (!this._clipboardOnly)
+            if (this._sessionLive)
                 this._cancelFromFocus();
         });
         this._targetFocusSignal = global.display.connect('notify::focus-window', () => {
-            if (this._session && !this._clipboardOnly && this._target && global.display.focus_window !== this._target)
+            if (this._session && this._sessionLive && this._target && global.display.focus_window !== this._target)
                 this._cancelFromFocus();
         });
         this._heldKeys.clear();
@@ -411,7 +405,6 @@ export default class RenExtension extends Extension {
         this._sessionStart = parseShortcut(this._settings.get_strv('toggle-shortcut')[0]);
         this._showLive = this._proxy.LivePreview !== false;
         this._sessionLive = Boolean(this._target);
-        this._clipboardOnly = !this._target;
         this._finishWaiting = false;
         this._cancelled = false;
         const generation = ++this._generation;
@@ -454,13 +447,12 @@ export default class RenExtension extends Extension {
                         return false;
                     this._composition = null;
                     this._sessionLive = false;
-                    this._clipboardOnly = true;
                     this._bindShortcut();
                 }
                 if (!this._enabled || generation !== this._generation || this._cancelled)
                     return false;
                 if (this._latestPartial && this._showLive && this._composition)
-                    this._composition.update(this._latestPartial.text, this._latestPartial.stableBytes);
+                    this._composition.update(this._latestPartial);
             }
             if (!this._sessionLive) {
                 // Capture finish/cancel keys even when no input field is focused.
@@ -589,7 +581,7 @@ export default class RenExtension extends Extension {
         if (active) {
             this._startOrb();
         } else {
-            this._stopWave();
+            this._stopOrb();
             this._clearDraft();
         }
         if (active) {
@@ -604,8 +596,8 @@ export default class RenExtension extends Extension {
         if (this._orbTimeline)
             return;
         if (!this._orbStarted) {
-            this._orbBands = [0, 0, 0, 0];
-            this._orbVelocity = [0, 0, 0, 0];
+            this._orbLevel = 0;
+            this._orbVelocity = 0;
             this._orbCommandMix = 0;
             this._orbLoadingMix = this._state === 'recording' ? 0 : 1;
             this._orbStarted = GLib.get_monotonic_time();
@@ -629,21 +621,14 @@ export default class RenExtension extends Extension {
                 this._orbCommandMix = Number(command);
             const loading = this._state !== 'recording' && !this._autoCommand ? 1 : 0;
             this._orbLoadingMix += (loading - this._orbLoadingMix) * (1 - Math.exp(-dt / 0.28));
-            const activity = voiceIntensity(this._proxy?.Level || 0);
-            const bands = this._proxy?.Bands ?? [0, 0, 0];
-            const peak = Math.max(0.001, ...bands);
-            // The fourth channel is loudness, independent of frequency balance.
-            for (let i = 0; i < 4; i++) {
-                const target = i === 3 ? activity : activity * bands[i] / peak;
-                // Exact critically damped spring: smooth velocity at any frame rate.
-                const offset = this._orbBands[i] - target;
-                const velocity = this._orbVelocity[i];
-                const response = target > this._orbBands[i] ? 26 : 14;
-                const decay = Math.exp(-response * dt);
-                const impulse = velocity + response * offset;
-                this._orbBands[i] = target + (offset + impulse * dt) * decay;
-                this._orbVelocity[i] = (velocity - response * impulse * dt) * decay;
-            }
+            const target = voiceIntensity(this._proxy?.Level || 0);
+            // Exact critically damped spring: smooth velocity at any frame rate.
+            const offset = this._orbLevel - target;
+            const response = target > this._orbLevel ? 26 : 14;
+            const decay = Math.exp(-response * dt);
+            const impulse = this._orbVelocity + response * offset;
+            this._orbLevel = target + (offset + impulse * dt) * decay;
+            this._orbVelocity = (this._orbVelocity - response * impulse * dt) * decay;
             this._wave.queue_repaint();
         });
         this._orbTimeline.start();
@@ -658,11 +643,7 @@ export default class RenExtension extends Extension {
         this._orbStarted = 0;
         this._orbFrame = null;
         this._orbCommandMix = 0;
-        this._orbBands = [0, 0, 0, 0];
-    }
-
-    _stopWave() {
-        this._stopOrb();
+        this._orbLevel = 0;
     }
 
     _positionPill() {
@@ -680,15 +661,15 @@ export default class RenExtension extends Extension {
             Math.round(area.y + Math.max(0, area.height - this._pill.height - 16)));
     }
 
-    _receivePartial(text, stableBytes) {
+    _receivePartial(text) {
         if (!this._session || this._cancelled || this._autoCommand ||
             !ACTIVE.has(this._state) || this._pendingText !== null)
             return;
         this._orbCommandPreview = isBrowserCommandPreview(text) || startsBrowserCommand(text);
         const draft = this._orbCommandPreview ? '' : text;
-        this._latestPartial = {text: draft, stableBytes: draft ? stableBytes : 0};
+        this._latestPartial = draft;
         if (this._showLive)
-            this._composition?.update(draft, draft ? stableBytes : 0);
+            this._composition?.update(draft);
         if (startsBrowserCommand(text)) {
             this._autoCommand = true;
             this._commandAnimating = true;
@@ -708,7 +689,7 @@ export default class RenExtension extends Extension {
     _clearDraft() {
         this._latestPartial = null;
         this._orbCommandPreview = false;
-        this._composition?.update('', 0);
+        this._composition?.update('');
     }
 
     _receiveTranscript(text) {
@@ -758,7 +739,7 @@ export default class RenExtension extends Extension {
             this._inserting = true;
             // Keep the same particles on screen while input-method cleanup finishes.
             if (!text || openBrowser) {
-                this._stopWave();
+                this._stopOrb();
                 this._pill.hide();
             }
             if (this._sessionLive) {
@@ -803,24 +784,15 @@ export default class RenExtension extends Extension {
                 this._clearTarget();
                 return;
             }
-            if (this._clipboardOnly) {
-                St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
-                Main.notify('Ren', 'Transcript copied to clipboard.');
-                this._clearTarget();
-                this._showFeedback('copied');
-                return;
-            }
-            if (!this._target) {
-                this._insertionError('The original window closed.');
-                return;
-            }
-            Main.activateWindow(this._target);
-            this._later(120, () => this._insert(text, 0, generation));
+            St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
+            Main.notify('Ren', 'Transcript copied to clipboard.');
+            this._clearTarget();
+            this._showFeedback('copied');
         });
     }
 
     _showFeedback(kind) {
-        this._feedbackFrame = this._orbFrame ?? sampleOrb([0, 0, 0], 0, 0, 1);
+        this._feedbackFrame = this._orbFrame ?? sampleOrb(0, 0, 0, 1);
         this._feedbackStarted = GLib.get_monotonic_time();
         this._feedback = kind;
         this._drawState();
@@ -935,81 +907,6 @@ export default class RenExtension extends Extension {
         }
     }
 
-    _insert(text, attempt, generation) {
-        if (generation !== this._generation)
-            return;
-        if (this._cancelled) {
-            this._clearTarget();
-            return;
-        }
-        if (!this._target || global.display.focus_window !== this._target || Main.modalCount > 0 || Main.overview.visible) {
-            this._insertionError('The target window changed. Your transcript is available in Preferences.');
-            return;
-        }
-        // Commit text directly; synthesizing keyvals on Mutter 46 loses any
-        // Unicode character absent from the active physical keyboard layout.
-        try {
-            if (Main.inputMethod.currentFocus) {
-                Main.inputMethod.commit(text);
-                this._clearTarget();
-                this._showFeedback('inserted');
-                return;
-            }
-            const shellContext = Main.inputMethod._context?.get_object_path();
-            if (this._ibusContext && this._ibusPanel && this._ibusContext !== shellContext) {
-                this._ibusPanel.commit_text(IBus.Text.new_from_string(text));
-                this._clearTarget();
-                this._showFeedback('inserted');
-                return;
-            }
-        } catch (error) {
-            this._insertionError(`Could not insert text: ${error.message}. Your transcript is available in Preferences.`);
-            return;
-        }
-        if (attempt < 8) {
-            this._later(100, () => this._insert(text, attempt + 1, generation));
-            return;
-        }
-        this._insertionError('This text field does not expose a Wayland or IBus input method. Your transcript is available in Preferences.');
-    }
-
-    _watchIbusPanel() {
-        this._disconnectIbusPanel();
-        // GNOME owns the IBus panel; reuse its commit channel without changing
-        // the user's input engine. This Shell internal is pinned to GNOME 46.
-        this._ibusPanel = this._ibus._panelService;
-        if (!this._ibusPanel)
-            return;
-        this._ibusInSignal = this._ibusPanel.connect('focus-in', (_panel, path) => {
-            this._ibusContext = path;
-        });
-        this._ibusOutSignal = this._ibusPanel.connect('focus-out', () => {
-            this._ibusContext = null;
-        });
-        this._ibusDestroySignal = this._ibusPanel.connect('destroy', () => {
-            // IBusManager can destroy its panel before emitting ready=false.
-            // GObject removes the handlers; never disconnect a disposed proxy.
-            this._ibusPanel = null;
-            this._ibusContext = null;
-            this._ibusInSignal = 0;
-            this._ibusOutSignal = 0;
-            this._ibusDestroySignal = 0;
-        });
-    }
-
-    _disconnectIbusPanel() {
-        if (this._ibusPanel) {
-            this._ibusPanel.disconnect(this._ibusInSignal);
-            this._ibusPanel.disconnect(this._ibusOutSignal);
-            this._ibusPanel.disconnect(this._ibusDestroySignal);
-        }
-        this._ibusPanel = null;
-        this._ibusContext = null;
-        this._ibusInSignal = 0;
-        this._ibusOutSignal = 0;
-        this._ibusDestroySignal = 0;
-    }
-
     _releaseGrab() {
         if (this._grab) {
             Main.popModal(this._grab);
@@ -1031,11 +928,6 @@ export default class RenExtension extends Extension {
             void this._composition.dispose();
             this._composition = null;
         }
-    }
-
-    _insertionError(message) {
-        this._clearTarget();
-        this._call('ReportError', new GLib.Variant('(s)', [message]));
     }
 
     _error(message) {

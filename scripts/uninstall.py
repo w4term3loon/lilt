@@ -25,12 +25,13 @@ if __name__ == '__main__':
     try:
         if not data.is_absolute() or not config.is_absolute():
             raise ValueError('XDG directories must be absolute paths.')
-        for command in (['gnome-extensions', 'disable', 'ren@local'], [str(prefix / 'bin/ren'), '--quit']):
+        uuid = 'ren@w4term3loon.github.io'
+        for command in (['gnome-extensions', 'disable', uuid], [str(prefix / 'bin/ren'), '--quit']):
             try:
                 subprocess.run(command, capture_output=True, timeout=5)
             except (OSError, subprocess.TimeoutExpired):
                 pass
-        for path in (prefix / 'bin/ren', data / 'gnome-shell/extensions/ren@local',
+        for path in (prefix / 'bin/ren', data / 'gnome-shell/extensions' / uuid,
                      data / 'applications/io.github.ren.Dictation.desktop',
                      data / 'dbus-1/services/io.github.ren.Dictation.service',
                      data / 'icons/hicolor/scalable/apps/io.github.ren.Dictation.svg'):
@@ -42,6 +43,6 @@ if __name__ == '__main__':
         else:
             for name in ('download-model.py', 'uninstall.py', 'LICENSE', 'LICENSES', 'THIRD_PARTY_NOTICES.md', '__pycache__'):
                 remove(prefix / 'share/ren' / name)
-        print('Removed ren.' + (' Settings and models deleted.' if args.purge_data else ' Settings and models kept.'))
+        print('Removed Ren.' + (' Settings and models deleted.' if args.purge_data else ' Settings and models kept.'))
     except (OSError, ValueError) as error:
         parser.exit(1, f'Removal failed: {error}\n')

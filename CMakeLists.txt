@@ -38,9 +38,12 @@ target_compile_options(ren PRIVATE -Wall -Wextra -Wpedantic)
 # The installer copies this executable directly; keep build paths out of it.
 set_target_properties(ren PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "")
 if(BUILD_TESTING)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_executable(engine_test tests/engine_test.cpp)
   target_link_libraries(engine_test PRIVATE ren_engine)
   add_test(NAME engine COMMAND engine_test)
+  add_test(NAME installation
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_test.py")
   find_program(REN_GJS gjs)
   if(REN_GJS)
     add_test(NAME extension_text

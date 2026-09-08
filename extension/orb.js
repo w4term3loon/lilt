@@ -50,12 +50,11 @@ function unit(value) {
     return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
 }
 
-export function sampleOrb(bands, elapsed, command = 0, loading = 0, voice = undefined) {
-    bands = Array.from({length: 3}, (_, i) => unit(bands?.[i]));
+export function sampleOrb(voice, elapsed, command = 0, loading = 0) {
     elapsed = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
     command = unit(command);
     loading = unit(loading);
-    const activity = unit(voice ?? Math.max(...bands));
+    const activity = unit(voice);
     const color = mix(tones[35].warm, tones[35].purple, command);
     const centers = clusters.map(cluster => ({
         x: cluster.x + 3.2 * noise(elapsed * 0.22 + cluster.phase),

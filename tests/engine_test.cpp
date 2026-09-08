@@ -1,7 +1,6 @@
 #include "engine.hpp"
 #include "text.hpp"
 #include "streaming_text.hpp"
-#include "audio_bands.hpp"
 #include "migration.hpp"
 
 #include <sys/socket.h>
@@ -319,19 +318,6 @@ void migration_tests(const std::filesystem::path& directory) {
 
 int main() {
     try {
-        const std::array<double, 3> tones{150, 700, 3000};
-        for (std::size_t band = 0; band < tones.size(); ++band) {
-            ren::AudioBands meter;
-            for (int sample = 0; sample < 16000; ++sample)
-                meter.add(0.1 * std::sin(2 * 3.141592653589793 * tones[band] * sample / 16000));
-            const auto levels = meter.take();
-            for (std::size_t other = 0; other < levels.size(); ++other)
-                if (other != band) expect(levels[band] > levels[other], "Tone activates its frequency band");
-            expect(meter.take() == std::array<double, 3>{}, "Empty interval has no band energy");
-        }
-        ren::AudioBands silence;
-        for (int sample = 0; sample < 1600; ++sample) silence.add(0);
-        expect(silence.take() == std::array<double, 3>{}, "Silence leaves all bands still");
         TemporaryDirectory directory;
         text_tests();
         preview_tests();

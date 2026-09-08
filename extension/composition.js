@@ -3,7 +3,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import IBus from 'gi://IBus';
 
-import {insertionText, compositionParts} from './text.js';
+import {insertionText} from './text.js';
 
 const IBUS_NAME = 'org.freedesktop.IBus';
 const IBUS_PATH = '/org/freedesktop/IBus';
@@ -335,13 +335,12 @@ export class Composition {
         }
     }
 
-    update(text, stableBytes) {
+    update(text) {
         const session = this._session;
         if (!session?.ready || session.cancelled || session.closing ||
             session.committed || session.focusedContext !== session.originalContext)
             return;
-        const parts = compositionParts(text, stableBytes);
-        const content = parts.stable + parts.tentative;
+        const content = insertionText(text);
         const length = [...content].length;
         const preedit = IBus.Text.new_from_string(content);
         // Attribute ranges are Unicode character indices, never UTF-8 bytes or

@@ -54,7 +54,6 @@ constexpr auto kXml = R"(<node><interface name="io.github.ren.Dictation">
 <method name="GetLastTranscript"><arg type="s" direction="out" name="text"/></method>
 <method name="ReportError"><arg type="s" direction="in" name="message"/></method>
 <property name="State" type="s" access="read"/><property name="Level" type="d" access="read"/>
-<property name="Bands" type="ad" access="read"/>
 <property name="Message" type="s" access="read"/><property name="Shortcut" type="s" access="read"/>
 <property name="FinishShortcut" type="s" access="read"/>
 <property name="LivePreview" type="b" access="read"/>
@@ -228,13 +227,13 @@ void App::toggle() {
     cb.on_state = [this, generation](std::string state, std::string message) {
         dispatch([this, generation, state, message] { if (generation == generation_) set_state(state, message); else if (state == "idle" || state == "error") { refresh(); publish(); } });
     };
-    cb.on_level = [this, generation](double level, std::array<double, 3> bands) {
-        dispatch([this, generation, level, bands] {
+    cb.on_level = [this, generation](double level) {
+        dispatch([this, generation, level] {
             if (generation == generation_ && state_ == "recording") {
                 if (level >= 0.001) heard_input_ = true;
                 else if (quiet_levels_ < 60) ++quiet_levels_;
                 if (update_input_warning()) refresh();
-                level_ = level; bands_ = bands; publish();
+                level_ = level; publish();
             }
         });
     };
@@ -295,7 +294,7 @@ bool App::update_input_warning() {
 void App::set_state(const std::string& state, const std::string& message) {
     state_ = state; message_ = message;
     update_input_warning();
-    if (state != "recording") { level_ = 0; bands_ = {}; }
+    if (state != "recording") level_ = 0;
     publish(); refresh();
 }
 void App::publish() {
@@ -305,8 +304,6 @@ void App::publish() {
     g_variant_builder_add(&changed, "{sv}", "State", g_variant_new_string(state_.c_str()));
     g_variant_builder_add(&changed, "{sv}", "Message", g_variant_new_string(message_.c_str()));
     g_variant_builder_add(&changed, "{sv}", "Level", g_variant_new_double(level_));
-    g_variant_builder_add(&changed, "{sv}", "Bands",
-        g_variant_new_fixed_array(G_VARIANT_TYPE_DOUBLE, bands_.data(), bands_.size(), sizeof(double)));
     g_variant_builder_add(&changed, "{sv}", "Shortcut", g_variant_new_string(shortcut_.c_str()));
     g_variant_builder_add(&changed, "{sv}", "FinishShortcut", g_variant_new_string(finish_shortcut_.c_str()));
     g_variant_builder_add(&changed, "{sv}", "LivePreview", g_variant_new_boolean(live_preview_));
@@ -326,8 +323,6 @@ GVariant* App::get_property(GDBusConnection*, const gchar*, const gchar*, const 
     if (g_str_equal(property, "HasTranscript")) return g_variant_new_boolean(!self->last_transcript_.empty());
     if (g_str_equal(property, "InputWarning")) return g_variant_new_string(self->input_warning_.c_str());
     if (g_str_equal(property, "Level")) return g_variant_new_double(self->level_);
-    if (g_str_equal(property, "Bands"))
-        return g_variant_new_fixed_array(G_VARIANT_TYPE_DOUBLE, self->bands_.data(), self->bands_.size(), sizeof(double));
     return nullptr;
 }
 void App::method_call(GDBusConnection*, const gchar* sender, const gchar*, const gchar*, const gchar* method,
@@ -789,8 +784,10 @@ void App::download_model() {
             auto* self = context->app;
             const bool success = ok && g_subprocess_get_successful(G_SUBPROCESS(process));
             g_clear_object(&self->download_);
-            if (success) self->set_state("idle", "Ready");
-            else self->set_state("error", error ? error->message : stderr_text && *stderr_text ? stderr_text : "Model download failed. Try again.");
+            if (success) {
+                self->engine_.release_model();
+                self->set_state("idle", "Ready");
+            } else self->set_state("error", error ? error->message : stderr_text && *stderr_text ? stderr_text : "Model download failed. Try again.");
         }
         g_free(stderr_text); g_clear_error(&error);
     }, new DownloadContext{this, alive_});

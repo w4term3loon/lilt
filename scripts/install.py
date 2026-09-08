@@ -39,6 +39,9 @@ def install(binary):
         raise ValueError('Build first: ./scripts/build.sh')
     if not DATA.is_absolute():
         raise ValueError('XDG_DATA_HOME must be an absolute path.')
+    # Desktop Entry forbids '=' in executables; GLib cannot discover one with '%'.
+    if any(character in str(PREFIX) for character in '%=\r\n'):
+        raise ValueError('The home path must not contain %, = or line breaks.')
     uuid = json.loads((ROOT / 'extension/metadata.json').read_text())['uuid']
     extensions = DATA / 'gnome-shell/extensions'
     extensions.mkdir(parents=True, exist_ok=True)
@@ -58,12 +61,12 @@ def install(binary):
         for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'LICENSES/whisper.cpp-MIT.txt'):
             copy(ROOT / name, PREFIX / 'share/ren' / name)
         previous = Path(temporary) / 'previous'
-        if target.exists():
+        if target.exists() or target.is_symlink():
             target.rename(previous)
         try:
             prepared.rename(target)
         except OSError:
-            if previous.exists():
+            if previous.exists() or previous.is_symlink():
                 previous.rename(target)
             raise
 
@@ -71,17 +74,19 @@ def install(binary):
     if alias.is_symlink() and alias.resolve() in (PREFIX / 'bin/lilt', PREFIX / 'bin/ren'):
         alias.unlink()
     # Retire old launchers together; stale bus names cause activation timeouts.
-    for old in ('lilt', 'ptt'):
+    for old in ('ren', 'lilt', 'ptt'):
         run('gnome-extensions', 'disable', f'{old}@local')
-        old_binary = PREFIX / 'bin' / old
-        if old_binary.exists():
-            run(str(old_binary), '--quit')
-        old_binary.unlink(missing_ok=True)
         legacy = extensions / f'{old}@local'
         if legacy.is_symlink():
             legacy.unlink()
         elif legacy.exists():
             shutil.rmtree(legacy)
+        if old == 'ren':
+            continue
+        old_binary = PREFIX / 'bin' / old
+        if old_binary.exists():
+            run(str(old_binary), '--quit')
+        old_binary.unlink(missing_ok=True)
         for directory, suffix in (('dbus-1/services', 'service'), ('applications', 'desktop'),
                                   ('icons/hicolor/scalable/apps', 'svg')):
             (DATA / directory / f'io.github.{old}.Dictation.{suffix}').unlink(missing_ok=True)
@@ -122,13 +127,17 @@ def install(binary):
     run('update-desktop-database', str(DATA / 'applications'))
     if not run('gnome-extensions', 'enable', uuid):
         # GNOME discovers a newly installed extension at the next login.
-        current = subprocess.check_output(['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions'],
-                                          text=True, timeout=5).strip().removeprefix('@as ')
-        enabled = [entry for entry in ast.literal_eval(current) if entry not in ('lilt@local', 'ptt@local', uuid)]
-        subprocess.run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions', repr([*enabled, uuid])],
-                       check=True, timeout=5)
-        print('Log out and back in to load the extension.')
-    print('Installed ren. Log out and back in after an upgrade.')
+        # The disabled list takes precedence, including after a reinstall.
+        for key in ('enabled-extensions', 'disabled-extensions'):
+            current = subprocess.check_output(['gsettings', 'get', 'org.gnome.shell', key],
+                                              text=True, timeout=5).strip().removeprefix('@as ')
+            entries = [entry for entry in ast.literal_eval(current)
+                       if entry not in ('ren@local', 'lilt@local', 'ptt@local', uuid)]
+            if key == 'enabled-extensions':
+                entries.append(uuid)
+            subprocess.run(['gsettings', 'set', 'org.gnome.shell', key, repr(entries)],
+                           check=True, timeout=5)
+    print('Installed Ren. Log out and back in to load the extension.')
 
 
 if __name__ == '__main__':

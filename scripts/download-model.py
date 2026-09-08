@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Download a pinned Whisper GGML model, checking its complete SHA-256 digest.
 
-Only Python's standard library is needed. The application itself does not use
-Python or a network connection. Files are published only after verification.
+Only Python's standard library is needed. Transcription works offline once a
+model is installed. Files are published only after verification.
 """
 
 import argparse
