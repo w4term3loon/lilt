@@ -57,6 +57,7 @@ constexpr auto kXml = R"(<node><interface name="io.github.ren.Dictation">
 <property name="Message" type="s" access="read"/><property name="Shortcut" type="s" access="read"/>
 <property name="FinishShortcut" type="s" access="read"/>
 <property name="LivePreview" type="b" access="read"/>
+<property name="CopyToClipboard" type="b" access="read"/>
 <property name="HasTranscript" type="b" access="read"/><property name="InputWarning" type="s" access="read"/>
 <signal name="PartialTranscript"><arg type="s" name="text"/><arg type="u" name="stable_bytes"/></signal>
 <signal name="Transcript"><arg type="s" name="text"/></signal>
@@ -307,6 +308,7 @@ void App::publish() {
     g_variant_builder_add(&changed, "{sv}", "Shortcut", g_variant_new_string(shortcut_.c_str()));
     g_variant_builder_add(&changed, "{sv}", "FinishShortcut", g_variant_new_string(finish_shortcut_.c_str()));
     g_variant_builder_add(&changed, "{sv}", "LivePreview", g_variant_new_boolean(live_preview_));
+    g_variant_builder_add(&changed, "{sv}", "CopyToClipboard", g_variant_new_boolean(copy_to_clipboard_));
     g_variant_builder_add(&changed, "{sv}", "HasTranscript", g_variant_new_boolean(!last_transcript_.empty()));
     g_variant_builder_add(&changed, "{sv}", "InputWarning", g_variant_new_string(input_warning_.c_str()));
     g_variant_builder_init(&invalidated, G_VARIANT_TYPE("as"));
@@ -320,6 +322,7 @@ GVariant* App::get_property(GDBusConnection*, const gchar*, const gchar*, const 
     if (g_str_equal(property, "Shortcut")) return g_variant_new_string(self->shortcut_.c_str());
     if (g_str_equal(property, "FinishShortcut")) return g_variant_new_string(self->finish_shortcut_.c_str());
     if (g_str_equal(property, "LivePreview")) return g_variant_new_boolean(self->live_preview_);
+    if (g_str_equal(property, "CopyToClipboard")) return g_variant_new_boolean(self->copy_to_clipboard_);
     if (g_str_equal(property, "HasTranscript")) return g_variant_new_boolean(!self->last_transcript_.empty());
     if (g_str_equal(property, "InputWarning")) return g_variant_new_string(self->input_warning_.c_str());
     if (g_str_equal(property, "Level")) return g_variant_new_double(self->level_);
@@ -377,12 +380,14 @@ void App::load_config() {
         migrate = std::string(group) != "ren" || take(g_key_file_get_string(file, group, "language", nullptr)) != "en";
         read("finish_shortcut", finish_shortcut_);
         read("vocabulary", vocabulary_);
-        if (g_key_file_has_key(file, group, "live_preview", nullptr)) {
+        auto read_flag = [&](const char* key, bool& out) {
             GError* error = nullptr;
-            const bool value = g_key_file_get_boolean(file, group, "live_preview", &error);
-            if (!error) live_preview_ = value;
+            const bool value = g_key_file_get_boolean(file, group, key, &error);
+            if (!error) out = value;
             g_clear_error(&error);
-        }
+        };
+        read_flag("live_preview", live_preview_);
+        read_flag("copy_to_clipboard", copy_to_clipboard_);
     }
     const auto previous_model = model_;
     vocabulary_ = normalize_vocabulary(vocabulary_);
@@ -403,6 +408,7 @@ void App::save_config() {
     g_key_file_set_string(file, "ren", "shortcut", shortcut_.c_str());
     g_key_file_set_string(file, "ren", "finish_shortcut", finish_shortcut_.c_str());
     g_key_file_set_boolean(file, "ren", "live_preview", live_preview_);
+    g_key_file_set_boolean(file, "ren", "copy_to_clipboard", copy_to_clipboard_);
     g_key_file_set_string(file, "ren", "vocabulary", vocabulary_.c_str());
     GError* error = nullptr;
     if (!g_key_file_save_to_file(file, config_path_.c_str(), &error)) {
@@ -415,14 +421,14 @@ void App::show() {
     if (!window_) build_ui();
     refresh(); gtk_widget_show_all(window_);
     gtk_widget_set_visible(recovery_, state_ == "error" && !last_transcript_.empty());
-    gtk_window_resize(GTK_WINDOW(window_), 400, 1);
+    gtk_window_resize(GTK_WINDOW(window_), 350, 1);
     gtk_window_present(GTK_WINDOW(window_));
 }
 void App::build_ui() {
     building_ui_ = true;
     window_ = gtk_application_window_new(app_);
     gtk_window_set_title(GTK_WINDOW(window_), "Ren");
-    gtk_window_set_default_size(GTK_WINDOW(window_), 400, 1);
+    gtk_window_set_default_size(GTK_WINDOW(window_), 350, 1);
     gtk_window_set_resizable(GTK_WINDOW(window_), FALSE);
     gtk_window_set_icon_name(GTK_WINDOW(window_), kInterface);
     gtk_style_context_add_class(gtk_widget_get_style_context(window_), "ren-preferences");
@@ -505,20 +511,29 @@ void App::build_ui() {
     row(grid, "Start", shortcut_button_, 0);
     finish_button_ = gtk_button_new();
     row(grid, "Finish", finish_button_, 1);
-    preview_switch_ = gtk_switch_new();
-    gtk_switch_set_active(GTK_SWITCH(preview_switch_), live_preview_);
-    gtk_widget_set_halign(preview_switch_, GTK_ALIGN_END);
-    gtk_widget_set_valign(preview_switch_, GTK_ALIGN_CENTER);
+    auto switch_row = [&](const char* title, bool active, int position) {
+        auto* control = gtk_switch_new();
+        gtk_switch_set_active(GTK_SWITCH(control), active);
+        gtk_widget_set_valign(control, GTK_ALIGN_CENTER);
+        auto* field = label(title, "ren-field");
+        gtk_widget_set_size_request(field, -1, 36);
+        gtk_widget_set_valign(field, GTK_ALIGN_CENTER);
+        gtk_label_set_mnemonic_widget(GTK_LABEL(field), control);
+        auto* line = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        gtk_box_pack_start(GTK_BOX(line), field, TRUE, TRUE, 0);
+        gtk_box_pack_end(GTK_BOX(line), control, FALSE, FALSE, 0);
+        gtk_grid_attach(GTK_GRID(grid), line, 0, position, 2, 1);
+        return control;
+    };
+    preview_switch_ = switch_row("Live text", live_preview_, 2);
     gtk_widget_set_tooltip_text(preview_switch_, "Show text while you speak.");
-    auto* preview_control = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_box_pack_end(GTK_BOX(preview_control), preview_switch_, FALSE, FALSE, 0);
-    row(grid, "Live text", preview_control, 2);
-    atk_object_set_name(gtk_widget_get_accessible(preview_switch_), "Live text");
+    copy_switch_ = switch_row("Copy to clipboard", copy_to_clipboard_, 3);
+    gtk_widget_set_tooltip_text(copy_switch_, "Copy finished text when there is no writable text field.");
     auto* divider = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
     gtk_style_context_add_class(gtk_widget_get_style_context(divider), "ren-divider");
-    gtk_grid_attach(GTK_GRID(grid), divider, 0, 3, 2, 1);
+    gtk_grid_attach(GTK_GRID(grid), divider, 0, 4, 2, 1);
     auto* vocabulary_label = label("Vocabulary", "ren-field");
-    gtk_grid_attach(GTK_GRID(grid), vocabulary_label, 0, 4, 2, 1);
+    gtk_grid_attach(GTK_GRID(grid), vocabulary_label, 0, 5, 2, 1);
     vocabulary_entry_ = gtk_entry_new();
     gtk_entry_set_max_length(GTK_ENTRY(vocabulary_entry_), 512);
     gtk_entry_set_width_chars(GTK_ENTRY(vocabulary_entry_), 14);
@@ -526,7 +541,7 @@ void App::build_ui() {
     gtk_entry_set_placeholder_text(GTK_ENTRY(vocabulary_entry_), "Names, terms…");
     gtk_entry_set_text(GTK_ENTRY(vocabulary_entry_), vocabulary_.c_str());
     gtk_widget_set_tooltip_text(vocabulary_entry_, "Optional words to help recognition. Stored locally.");
-    gtk_grid_attach(GTK_GRID(grid), vocabulary_entry_, 0, 5, 2, 1);
+    gtk_grid_attach(GTK_GRID(grid), vocabulary_entry_, 0, 6, 2, 1);
     gtk_label_set_mnemonic_widget(GTK_LABEL(vocabulary_label), vocabulary_entry_);
     pack(box, status_label_);
     sound_settings_ = gtk_button_new_with_label("Open Sound Settings");
@@ -552,6 +567,11 @@ void App::build_ui() {
     g_signal_connect(preview_switch_, "notify::active", G_CALLBACK(+[](GObject* w, GParamSpec*, gpointer d) {
         auto* self = static_cast<App*>(d); if (self->building_ui_) return;
         self->live_preview_ = gtk_switch_get_active(GTK_SWITCH(w));
+        self->save_config();
+    }), this);
+    g_signal_connect(copy_switch_, "notify::active", G_CALLBACK(+[](GObject* w, GParamSpec*, gpointer d) {
+        auto* self = static_cast<App*>(d); if (self->building_ui_) return;
+        self->copy_to_clipboard_ = gtk_switch_get_active(GTK_SWITCH(w));
         self->save_config();
     }), this);
     g_signal_connect(download_button_, "clicked", G_CALLBACK(+[](GtkButton*, gpointer d) { static_cast<App*>(d)->download_model(); }), this);
@@ -585,6 +605,7 @@ void App::refresh() {
     gtk_widget_set_sensitive(shortcut_button_, !engine_.busy());
     gtk_widget_set_sensitive(finish_button_, !engine_.busy());
     gtk_widget_set_sensitive(preview_switch_, !engine_.busy());
+    gtk_widget_set_sensitive(copy_switch_, !engine_.busy());
     gtk_widget_set_sensitive(vocabulary_entry_, !engine_.busy());
     gtk_button_set_label(GTK_BUTTON(shortcut_button_), shortcut_label(shortcut_).c_str());
     gtk_button_set_label(GTK_BUTTON(finish_button_), shortcut_label(finish_shortcut_).c_str());

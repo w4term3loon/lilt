@@ -23,8 +23,9 @@ const wisps = Array.from({length: 72}, (_, i) => ({
     cluster: i % clusters.length,
     x: (random(100 + i * 4) - 0.5) * 10,
     y: (random(101 + i * 4) - 0.5) * 10,
-    size: 0.6 + random(102 + i * 4) * 0.65,
+    size: 0.8 + random(102 + i * 4) * 0.5,
     phase: random(103 + i * 4) * 100,
+    response: (random(400 + i) - 0.5) * 1.1,
 }));
 
 // Stable pearlescent tones: copper/orange/pearl, aubergine/mauve/lilac for commands.
@@ -38,7 +39,7 @@ const tones = wisps.map((_, index) => {
         : mix(palette[1], palette[2], (t - 0.65) / 0.35)).map(value => value / 255);
     const color = tint(warm);
     const pale = (brightness(color) * 255 - brightness(warm[0])) / (brightness(warm[2]) - brightness(warm[0]));
-    return {warm: color, purple: tint(purple), weight: 0.55 + 1.35 * pale};
+    return {warm: color, purple: tint(purple), pale, weight: 0.22 + 2.2 * pale ** 1.6};
 });
 
 export function voiceIntensity(rms) {
@@ -60,7 +61,7 @@ export function sampleOrb(voice, elapsed, command = 0, loading = 0) {
         x: cluster.x + 3.2 * noise(elapsed * 0.22 + cluster.phase),
         y: cluster.y + 2.8 * noise(elapsed * 0.22 + cluster.phase + 200),
     }));
-    const spacing = 1.3 * 1.15;
+    const spacing = 1.3 * 1.15 * 1.28;
     const base = wisps.map(wisp => {
         const center = centers[wisp.cluster];
         return {
@@ -82,16 +83,20 @@ export function sampleOrb(voice, elapsed, command = 0, loading = 0) {
         weightedEnergy += radiusSquared * tones[i].weight ** 2;
     }
     // Paler pearls lead the radial motion; command colors retain the same weights.
-    const strength = 1.35 * activity * Math.sqrt(energy / weightedEnergy);
+    const strength = 1.35 * Math.sqrt(energy / weightedEnergy);
     const expansion = 1 + 1.3 * command;
     const dots = wisps.map((wisp, index) => {
-        const scale = 1 + strength * tones[index].weight;
+        const tint = tones[index];
+        // Each pearl follows the same voice with its own smooth response curve.
+        const response = activity * (1 + wisp.response * (1 - activity));
+        const scale = 1 + strength * response * tint.weight;
         const cloudX = base[index].x * scale;
         const cloudY = base[index].y * scale;
         const angle = index / wisps.length * Math.PI * 2 + elapsed * 3;
         let x = (cloudX + (20 * Math.cos(angle) - cloudX) * loading) * expansion;
         let y = (cloudY + (20 * Math.sin(angle) - cloudY) * loading) * expansion;
-        const radius = wisp.size * (1 + 0.18 * command);
+        const swell = response * (0.08 + 0.95 * tint.pale ** 2) * (1 - loading);
+        const radius = wisp.size * (1 + swell) * (1 + 0.18 * command);
         const limit = 68 - radius;
         const shoulder = limit * 0.72;
         const distance = Math.hypot(x, y);
@@ -103,9 +108,8 @@ export function sampleOrb(voice, elapsed, command = 0, loading = 0) {
             y *= bounded / distance;
         }
         const trail = 0.45 + 0.55 * (index / wisps.length) ** 2;
-        const alpha = ((0.65 + activity * 0.3) * (1 - loading) + trail * loading)
+        const alpha = ((0.82 + activity * 0.16) * (1 - loading) + trail * loading)
             * (index % 3 ? 1 - loading : 1);
-        const tint = tones[index];
         const color = command === 0 ? tint.warm : command === 1 ? tint.purple : mix(tint.warm, tint.purple, command);
         return {x, y, radius, alpha, color};
     });

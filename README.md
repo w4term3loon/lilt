@@ -45,6 +45,8 @@ Finishing inserts text without submitting the field. **Live text** shows a draft
 as you speak; turning it off hides drafts while recognition continues. Changing
 focus during dictation cancels text insertion. If the field cannot accept
 composition, Ren copies the finished text to the clipboard and notifies you.
+**Copy to clipboard** is on by default; turn it off to keep fallback text only in
+**Copy last dictation** until the next recording or Quit.
 
 Start with **“open browser”** to launch or focus your default browser immediately.
 This is a voice command: it ends dictation and keeps the phrase out of the field.

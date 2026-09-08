@@ -30,6 +30,7 @@ const BUS_XML = `<node><interface name="${BUS_NAME}">
     <property name="Shortcut" type="s" access="read"/>
     <property name="FinishShortcut" type="s" access="read"/>
     <property name="LivePreview" type="b" access="read"/>
+    <property name="CopyToClipboard" type="b" access="read"/>
     <property name="HasTranscript" type="b" access="read"/>
     <property name="InputWarning" type="s" access="read"/>
     <signal name="Transcript"><arg type="s" name="text"/></signal>
@@ -576,7 +577,8 @@ export default class RenExtension extends Extension {
             this._state === 'loading' ? 'Starting dictation. Escape to cancel.' :
                 'Transcribing. Escape to cancel.';
         if (this._feedback)
-            this._pill.accessible_name = this._feedback === 'copied' ? 'Transcript copied to clipboard.' : 'Transcript inserted.';
+            this._pill.accessible_name = this._feedback === 'copied' ? 'Transcript copied to clipboard.' :
+                this._feedback === 'ready' ? 'Dictation ready in the Ren menu.' : 'Transcript inserted.';
         this._wave.visible = active;
         if (active) {
             this._startOrb();
@@ -624,7 +626,7 @@ export default class RenExtension extends Extension {
             const target = voiceIntensity(this._proxy?.Level || 0);
             // Exact critically damped spring: smooth velocity at any frame rate.
             const offset = this._orbLevel - target;
-            const response = target > this._orbLevel ? 26 : 14;
+            const response = target > this._orbLevel ? 20 : 10;
             const decay = Math.exp(-response * dt);
             const impulse = this._orbVelocity + response * offset;
             this._orbLevel = target + (offset + impulse * dt) * decay;
@@ -784,10 +786,13 @@ export default class RenExtension extends Extension {
                 this._clearTarget();
                 return;
             }
-            St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
-            Main.notify('Ren', 'Transcript copied to clipboard.');
+            const copy = this._proxy.CopyToClipboard !== false;
+            if (copy)
+                St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
+            Main.notify('Ren', copy ? 'Transcript copied to clipboard.' :
+                'No writable field. Your text is available in Copy last dictation.');
             this._clearTarget();
-            this._showFeedback('copied');
+            this._showFeedback(copy ? 'copied' : 'ready');
         });
     }
 
