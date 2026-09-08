@@ -392,18 +392,6 @@ void App::build_ui() {
         }
         .lilt-preferences .lilt-field { font-weight: 500; }
         .lilt-preferences .lilt-status { font-size: 12px; }
-        .lilt-preferences .lilt-card button {
-            border-radius: 7px;
-            box-shadow: none;
-        }
-        .lilt-preferences .lilt-card button:focus {
-            border-color: #72a98e;
-        }
-        .lilt-preferences switch:checked {
-            background-color: #6eac8b;
-            background-image: none;
-            border-color: #589875;
-        }
     )", -1, nullptr);
     gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(css);
