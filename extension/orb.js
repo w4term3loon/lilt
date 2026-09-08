@@ -36,7 +36,7 @@ export function voiceIntensity(rms) {
     return signal / (1 + signal);
 }
 
-export function drawOrb(context, width, height, bands, elapsed, command = 0, loading = 0, feedback = '') {
+export function drawOrb(context, width, height, bands, elapsed, command = 0, loading = 0, feedback = '', feedbackPhase = 0) {
     const color = orange.map((value, i) => value + (purple[i] - value) * command);
     const centers = clusters.map((cluster, i) => ({
         x: cluster.x + 4 * noise(elapsed * 0.45 + cluster.phase)
@@ -49,28 +49,21 @@ export function drawOrb(context, width, height, bands, elapsed, command = 0, loa
     context.translate(width / 2, height / 2);
     const scale = Math.min(width, height) / 160;
     context.scale(scale, scale);
-    for (const [index, wisp] of wisps.entries()) {
-        if (feedback) {
-            if (feedback !== 'copied' && index % 3) continue;
-            const point = feedback === 'copied' ? index : index / 3;
-            let x, y;
-            if (feedback === 'copied') {
-                const back = point < 36;
-                const t = (point % 36) / 36 * 4;
-                const corners = [[-12, -15], [8, -15], [8, 11], [-12, 11], [-12, -15]];
-                const edge = Math.floor(t), fraction = t - edge;
-                x = corners[edge][0] + (corners[edge + 1][0] - corners[edge][0]) * fraction + (back ? 0 : 7);
-                y = corners[edge][1] + (corners[edge + 1][1] - corners[edge][1]) * fraction + (back ? 0 : 7);
-            } else {
-                const t = point / 23;
-                x = t < 0.35 ? -17 + t / 0.35 * 12 : -5 + (t - 0.35) / 0.65 * 24;
-                y = t < 0.35 ? t / 0.35 * 11 : 11 - (t - 0.35) / 0.65 * 27;
-            }
-            context.setSourceRGBA(...orange, Math.min(1, elapsed * 8));
-            context.arc(x, y, 1.15, 0, Math.PI * 2);
+    if (feedback) {
+        const t = Math.min(1, elapsed / 0.38);
+        const radius = 20 * (1 - t * t * (3 - 2 * t));
+        const alpha = 1 - Math.min(1, Math.max(0, (elapsed - 0.38) / 0.32));
+        context.setSourceRGBA(...orange, alpha);
+        for (let i = 0; i < (t < 1 ? 24 : 1); i++) {
+            const angle = i / 24 * Math.PI * 2 + (feedbackPhase + elapsed) * 3;
+            context.arc(radius * Math.cos(angle), radius * Math.sin(angle),
+                1 + t * 0.4, 0, Math.PI * 2);
             context.fill();
-            continue;
         }
+        context.restore();
+        return;
+    }
+    for (const [index, wisp] of wisps.entries()) {
         const center = centers[wisp.cluster];
         const drift = 1.5 + bands[2] * 8;
         const spread = 1 + center.strength * 0.85;
@@ -78,10 +71,13 @@ export function drawOrb(context, width, height, bands, elapsed, command = 0, loa
         const x = ((center.x + wisp.x) * spread + drift * noise(elapsed * 1.2 + wisp.phase)) * spacing;
         const y = ((center.y + wisp.y) * spread + drift * noise(elapsed * 1.2 + wisp.phase + 300)) * spacing;
         const angle = index / wisps.length * Math.PI * 2 + elapsed * 3;
-        const ringX = 28 * Math.cos(angle);
-        const ringY = 28 * Math.sin(angle);
+        const ringX = 20 * Math.cos(angle);
+        const ringY = 20 * Math.sin(angle);
         const trail = 0.45 + 0.55 * (index / wisps.length) ** 2;
-        context.setSourceRGBA(...color, (0.65 + center.strength * 0.35) * (1 - loading) + trail * loading);
+        const alpha = ((0.65 + center.strength * 0.35) * (1 - loading) + trail * loading)
+            * (index % 3 ? 1 - loading : 1);
+        if (alpha < 0.005) continue;
+        context.setSourceRGBA(...color, alpha);
         const expansion = 1 + 1.3 * command;
         context.arc((x + (ringX - x) * loading) * expansion,
             (y + (ringY - y) * loading) * expansion,

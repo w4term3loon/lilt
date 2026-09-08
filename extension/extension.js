@@ -246,7 +246,7 @@ export default class LiltExtension extends Extension {
             const [width, height] = this._wave.get_surface_size();
             drawOrb(context, width, height, this._orbBands ?? [0, 0, 0],
                 (GLib.get_monotonic_time() - (this._orbStarted ?? 0)) / 1000000,
-                this._orbCommandMix ?? 0, this._orbLoadingMix ?? 0, this._feedback ?? '');
+                this._orbCommandMix ?? 0, this._orbLoadingMix ?? 0, this._feedback ?? '', this._feedbackPhase ?? 0);
             context.$dispose();
         });
         content.add_child(this._wave);
@@ -706,6 +706,7 @@ export default class LiltExtension extends Extension {
             const openBrowser = isBrowserCommand(text);
             this._pendingText = null;
             this._inserting = true;
+            this._feedbackPhase = (GLib.get_monotonic_time() - (this._orbStarted ?? 0)) / 1000000;
             this._stopWave();
             this._pill.hide();
             if (this._sessionLive) {
@@ -768,7 +769,7 @@ export default class LiltExtension extends Extension {
         this._feedback = kind;
         this._drawState();
         const generation = this._generation;
-        this._later(900, () => {
+        this._later(720, () => {
             if (generation !== this._generation || this._session)
                 return;
             this._feedback = '';

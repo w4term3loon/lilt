@@ -46,7 +46,7 @@ Choose **Custom file…** to use a local whisper.cpp GGML model; compatibility i
 when loaded. Custom files stay in their original location.
 
 The cloud listens, the ring processes, and purple expansion recognizes a command.
-A brief particle checkmark means inserted; overlapping sheets mean copied.
+On completion, the ring gathers into one dot and fades. Clipboard output also shows a notification.
 
 ## Project
 
