@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import {insertionText, compositionParts, isBrowserCommand} from '../extension/text.js';
+import {insertionText, compositionParts, isBrowserCommand, isBrowserCommandPreview, startsBrowserCommand} from '../extension/text.js';
 
 function assert(condition, message) {
     if (!condition)
@@ -41,3 +41,11 @@ const long = compositionParts('🦉'.repeat(200), 400);
 assert(long.stable === '🦉'.repeat(100) && long.tentative === '🦉'.repeat(100),
     'Composition must retain complete text beyond the former preview limit');
 print('Text sanitization, UTF-8 stability, literal markup, and full composition tests passed');
+
+for (const text of ['open browser', 'Open browser.', 'open browser please'])
+    assert(startsBrowserCommand(text), 'First two words trigger the browser');
+for (const text of ['open browsers', 'please open browser', 'do not open browser'])
+    assert(!startsBrowserCommand(text), 'Only the exact opening words trigger');
+for (const text of ['open', 'open b', 'open browser'])
+    assert(isBrowserCommandPreview(text), 'Command candidates stay out of composition');
+assert(!isBrowserCommandPreview('open the document'), 'Noncommands return to dictation');

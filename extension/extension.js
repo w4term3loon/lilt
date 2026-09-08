@@ -12,7 +12,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
-import {insertionText, isBrowserCommand, isBrowserCommandPreview} from './text.js';
+import {insertionText, isBrowserCommand, isBrowserCommandPreview, startsBrowserCommand} from './text.js';
 import {Composition} from './composition.js';
 import {drawOrb, voiceIntensity} from './orb.js';
 
@@ -232,10 +232,10 @@ export default class LiltExtension extends Extension {
         });
         const content = new St.Widget({
             layout_manager: new Clutter.BinLayout(),
-            width: 64, height: 64,
+            width: 160, height: 160,
         });
         this._wave = new St.DrawingArea({
-            width: 64, height: 64,
+            width: 160, height: 160,
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
         });
@@ -245,24 +245,10 @@ export default class LiltExtension extends Extension {
             const [width, height] = this._wave.get_surface_size();
             drawOrb(context, width, height, this._orbBands ?? [0, 0, 0],
                 (GLib.get_monotonic_time() - (this._orbStarted ?? 0)) / 1000000,
-                this._orbCommandMix ?? 0);
+                this._orbCommandMix ?? 0, this._orbLoadingMix ?? 0);
             context.$dispose();
         });
         content.add_child(this._wave);
-        this._dotBox = new St.BoxLayout({
-            style_class: 'lilt-dots', visible: false,
-            x_align: Clutter.ActorAlign.CENTER,
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        this._dots = Array.from({length: 3}, () => {
-            const dot = new St.Widget({
-                style_class: 'lilt-dot',
-                y_align: Clutter.ActorAlign.CENTER,
-            });
-            this._dotBox.add_child(dot);
-            return dot;
-        });
-        content.add_child(this._dotBox);
         this._pill.set_child(content);
         this._pill.connect('captured-event', (_actor, event) => this._capture(event));
         this._pill.connect('clicked', () => {
@@ -394,6 +380,9 @@ export default class LiltExtension extends Extension {
         const generation = ++this._generation;
         this._pendingText = null;
         this._latestPartial = null;
+        this._autoCommand = false;
+        this._commandAnimating = false;
+        this._orbCommandPreview = false;
         this._session = true;
         this._preparing = true;
         this._awaitingNativeStart = nativeState === null;
@@ -511,7 +500,7 @@ export default class LiltExtension extends Extension {
             this._awaitingNativeStart = false;
         const previous = this._state;
         this._state = next;
-        if (next === 'idle' && this._proxy.Message === 'Cancelled') {
+        if (next === 'idle' && this._proxy.Message === 'Cancelled' && !this._autoCommand) {
             this._cancelled = true;
             this._pendingText = null;
             this._clearDraft();
@@ -534,21 +523,16 @@ export default class LiltExtension extends Extension {
 
     _drawState() {
         const recording = this._state === 'recording';
-        const active = ACTIVE.has(this._state);
+        const active = ACTIVE.has(this._state) || (this._commandAnimating && !this._cancelled);
         this._recordItem.label.text = recording ? 'Finish dictation' : 'Start dictation';
         this._recordItem.setSensitive(!active || recording);
         this._panelIcon[recording ? 'add_style_class_name' : 'remove_style_class_name']('lilt-panel-recording');
         this._pill.accessible_name = recording ? 'Recording. Click to finish dictation.' :
             this._state === 'loading' ? 'Starting dictation. Escape to cancel.' :
                 'Transcribing. Escape to cancel.';
-        this._wave.visible = recording;
-        this._dotBox.visible = active && !recording;
-        if (recording) {
-            this._stopDots();
+        this._wave.visible = active;
+        if (active) {
             this._startOrb();
-        } else if (active) {
-            this._stopOrb();
-            this._startDots();
         } else {
             this._stopWave();
             this._clearDraft();
@@ -567,6 +551,7 @@ export default class LiltExtension extends Extension {
         this._orbBands = [0, 0, 0];
         this._orbCommand = false;
         this._orbCommandMix = 0;
+        this._orbLoadingMix = this._state === 'recording' ? 0 : 1;
         this._orbStarted = GLib.get_monotonic_time();
         let lastFrame = this._orbStarted;
         this._wave.queue_repaint();
@@ -579,12 +564,14 @@ export default class LiltExtension extends Extension {
             const command = this._orbCommandPreview ?? false;
             if (command !== this._orbCommand) {
                 this._orbCommand = command;
-                this._wave.ease({scale_x: command ? 1.18 : 1, scale_y: command ? 1.18 : 1,
+                this._wave.ease({scale_x: command ? 2.3 : 1, scale_y: command ? 2.3 : 1,
                     duration: 280, mode: Clutter.AnimationMode.EASE_IN_OUT_CUBIC});
             }
             this._orbCommandMix += (Number(command) - this._orbCommandMix) * (1 - Math.exp(-dt / 0.075));
             if (Math.abs(Number(command) - this._orbCommandMix) < 0.002)
                 this._orbCommandMix = Number(command);
+            const loading = this._state !== 'recording' && !this._autoCommand ? 1 : 0;
+            this._orbLoadingMix += (loading - this._orbLoadingMix) * (1 - Math.exp(-dt / 0.16));
             const activity = voiceIntensity(this._proxy?.Level || 0);
             const bands = this._proxy?.Bands ?? [0, 0, 0];
             const peak = Math.max(0.001, ...bands);
@@ -610,42 +597,8 @@ export default class LiltExtension extends Extension {
         this._orbBands = [0, 0, 0];
     }
 
-    _startDots() {
-        if (this._dotSource)
-            return;
-        const started = GLib.get_monotonic_time();
-        const draw = () => {
-            const elapsed = (GLib.get_monotonic_time() - started) / 1000000;
-            for (const [index, dot] of this._dots.entries()) {
-                // Each dot makes one soft hop; the sequence repeats as a wave.
-                const phase = ((elapsed - index * 0.13) % 0.95 + 0.95) % 0.95;
-                const lift = phase < 0.48 ? Math.sin(phase / 0.48 * Math.PI) : 0;
-                dot.translation_y = -4 * lift;
-                dot.opacity = Math.round(155 + 90 * lift);
-            }
-        };
-        draw();
-        this._dotSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 32, () => {
-            draw();
-            return GLib.SOURCE_CONTINUE;
-        });
-    }
-
-    _stopDots() {
-        if (this._dotSource) {
-            GLib.source_remove(this._dotSource);
-            this._dotSource = 0;
-        }
-        for (const dot of this._dots ?? []) {
-            dot.remove_all_transitions();
-            dot.translation_y = 0;
-            dot.opacity = 155;
-        }
-    }
-
     _stopWave() {
         this._stopOrb();
-        this._stopDots();
     }
 
     _positionPill() {
@@ -661,12 +614,27 @@ export default class LiltExtension extends Extension {
     }
 
     _receivePartial(text, stableBytes) {
-        if (!this._session || !this._sessionLive || this._cancelled ||
+        if (!this._session || this._cancelled || this._autoCommand ||
             !ACTIVE.has(this._state) || !this._target || this._pendingText !== null)
             return;
-        this._latestPartial = {text, stableBytes};
-        this._orbCommandPreview = isBrowserCommandPreview(text);
-        this._composition?.update(text, stableBytes);
+        this._orbCommandPreview = isBrowserCommandPreview(text) || startsBrowserCommand(text);
+        const draft = this._orbCommandPreview ? '' : text;
+        this._latestPartial = {text: draft, stableBytes: draft ? stableBytes : 0};
+        this._composition?.update(draft, draft ? stableBytes : 0);
+        if (startsBrowserCommand(text)) {
+            this._autoCommand = true;
+            this._commandAnimating = true;
+            this._pendingText = 'open browser';
+            // No final decode is needed for a recognized fixed command.
+            this._call('Cancel');
+            const generation = this._generation;
+            this._later(420, () => {
+                if (generation !== this._generation)
+                    return;
+                this._commandAnimating = false;
+                this._finishSession();
+            });
+        }
     }
 
     _clearDraft() {
@@ -676,7 +644,7 @@ export default class LiltExtension extends Extension {
     }
 
     _receiveTranscript(text) {
-        if (!this._session || this._cancelled)
+        if (!this._session || this._cancelled || this._autoCommand)
             return;
         this._clearDraft();
         this._pendingText = insertionText(text);
@@ -685,6 +653,7 @@ export default class LiltExtension extends Extension {
 
     _finishSession() {
         if (!this._session || this._preparing || this._inserting ||
+            (this._commandAnimating && !this._cancelled) ||
             (this._awaitingNativeStart && !this._cancelled))
             return;
         const modifiers = this._sessionLive && !this._cancelled

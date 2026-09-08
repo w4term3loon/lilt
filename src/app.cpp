@@ -229,7 +229,7 @@ void App::toggle() {
     };
     cb.on_partial = [this, generation, owner](std::string text, std::size_t stable_bytes) {
         dispatch([this, generation, owner, text = std::move(text), stable_bytes] {
-            if (generation != generation_ || shell_owner_ != owner || owner.empty() || !live_preview_) return;
+            if (generation != generation_ || shell_owner_ != owner || owner.empty()) return;
             if (state_ != "recording" && state_ != "transcribing") return;
             const auto prefix = static_cast<guint32>(std::min(stable_bytes, text.size()));
             g_dbus_connection_emit_signal(bus_, owner.c_str(), kPath, kInterface,
@@ -247,7 +247,7 @@ void App::toggle() {
     set_state("loading", "Opening microphone…");
     try {
         engine_.start(model_path(), std::max(1u, std::min(4u, std::thread::hardware_concurrency())),
-                      std::move(cb), live_preview_);
+                      std::move(cb), true);
     } catch (const std::exception& error) { set_state("error", error.what()); }
 }
 

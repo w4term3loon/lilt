@@ -12,6 +12,10 @@ export function isBrowserCommand(text) {
     return /^open browser[.!?]*$/i.test(insertionText(text));
 }
 
+export function startsBrowserCommand(text) {
+    return /^open browser(?:[\s.!?,]|$)/i.test(insertionText(text));
+}
+
 export function isBrowserCommandPreview(text) {
     const phrase = insertionText(text).toLowerCase().replace(/[.!?]+$/, '');
     return phrase === 'open' || (phrase.startsWith('open ') && 'open browser'.startsWith(phrase));

@@ -7,9 +7,9 @@ cancel. Drafts appear in the focused field; finishing inserts text without
 sending it. The top-bar menu opens preferences for Model, Start, Finish, and
 Live text. Keep the destination field focused while dictating.
 
-Say only **“open browser”**, then finish, to launch or focus your default browser
-instead of inserting text. Longer sentences remain ordinary dictation.
-With Live text enabled, the orb turns purple when “open” is recognized.
+Start with **“open browser”** to launch or focus your default browser automatically.
+The command stays out of the text field; the particles expand in purple, then disappear.
+Live recognition runs with Live text off too; that switch only hides inline drafts.
 
 Audio stays in memory. No cloud transcription, clipboard, or recording history.
 Models download once, then work offline. Recordings are limited to three minutes.
