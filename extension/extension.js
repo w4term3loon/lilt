@@ -25,6 +25,7 @@ const BUS_XML = `<node><interface name="${BUS_NAME}">
     <method name="ReportError"><arg type="s" direction="in" name="message"/></method>
     <property name="State" type="s" access="read"/>
     <property name="Level" type="d" access="read"/>
+    <property name="Bands" type="ad" access="read"/>
     <property name="Message" type="s" access="read"/>
     <property name="Shortcut" type="s" access="read"/>
     <property name="FinishShortcut" type="s" access="read"/>
@@ -241,7 +242,7 @@ export default class LiltExtension extends Extension {
         this._wave.connect('repaint', () => {
             const context = this._wave.get_context();
             const [width, height] = this._wave.get_surface_size();
-            drawOrb(context, width, height, this._orbLevel ?? 0,
+            drawOrb(context, width, height, this._orbBands ?? [0, 0, 0],
                 (GLib.get_monotonic_time() - (this._orbStarted ?? 0)) / 1000000);
             context.$dispose();
         });
@@ -561,12 +562,17 @@ export default class LiltExtension extends Extension {
     _startOrb() {
         if (this._orbSource)
             return;
-        this._orbLevel = 0;
+        this._orbBands = [0, 0, 0];
         this._orbStarted = GLib.get_monotonic_time();
         this._wave.queue_repaint();
         this._orbSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 40, () => {
-            const target = voiceIntensity(this._proxy?.Level || 0);
-            this._orbLevel += (target - this._orbLevel) * (target > this._orbLevel ? 0.4 : 0.18);
+            const activity = voiceIntensity(this._proxy?.Level || 0);
+            const bands = this._proxy?.Bands ?? [0, 0, 0];
+            const peak = Math.max(0.001, ...bands);
+            for (let i = 0; i < 3; i++) {
+                const target = activity * bands[i] / peak;
+                this._orbBands[i] += (target - this._orbBands[i]) * (target > this._orbBands[i] ? 0.55 : 0.22);
+            }
             this._wave.queue_repaint();
             return GLib.SOURCE_CONTINUE;
         });
@@ -577,7 +583,7 @@ export default class LiltExtension extends Extension {
             GLib.source_remove(this._orbSource);
             this._orbSource = 0;
         }
-        this._orbLevel = 0;
+        this._orbBands = [0, 0, 0];
     }
 
     _startDots() {

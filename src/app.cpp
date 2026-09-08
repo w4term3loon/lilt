@@ -51,6 +51,7 @@ constexpr auto kXml = R"(<node><interface name="io.github.lilt.Dictation">
 <method name="ShowPreferences"/><method name="Quit"/><method name="Attach"/><method name="Detach"/>
 <method name="ReportError"><arg type="s" direction="in" name="message"/></method>
 <property name="State" type="s" access="read"/><property name="Level" type="d" access="read"/>
+<property name="Bands" type="ad" access="read"/>
 <property name="Message" type="s" access="read"/><property name="Shortcut" type="s" access="read"/>
 <property name="FinishShortcut" type="s" access="read"/>
 <property name="LivePreview" type="b" access="read"/>
@@ -219,7 +220,13 @@ void App::toggle() {
     cb.on_state = [this, generation](std::string state, std::string message) {
         dispatch([this, generation, state, message] { if (generation == generation_) set_state(state, message); else if (state == "idle" || state == "error") { refresh(); publish(); } });
     };
-    cb.on_level = [this, generation](double level) { dispatch([this, generation, level] { if (generation == generation_ && state_ == "recording") { level_ = level; publish(); } }); };
+    cb.on_level = [this, generation](double level, std::array<double, 3> bands) {
+        dispatch([this, generation, level, bands] {
+            if (generation == generation_ && state_ == "recording") {
+                level_ = level; bands_ = bands; publish();
+            }
+        });
+    };
     cb.on_partial = [this, generation, owner](std::string text, std::size_t stable_bytes) {
         dispatch([this, generation, owner, text = std::move(text), stable_bytes] {
             if (generation != generation_ || shell_owner_ != owner || owner.empty() || !live_preview_) return;
@@ -252,7 +259,7 @@ void App::cancel_session() {
 
 void App::set_state(const std::string& state, const std::string& message) {
     state_ = state; message_ = message;
-    if (state != "recording") level_ = 0;
+    if (state != "recording") { level_ = 0; bands_ = {}; }
     publish(); refresh();
 }
 void App::publish() {
@@ -262,6 +269,8 @@ void App::publish() {
     g_variant_builder_add(&changed, "{sv}", "State", g_variant_new_string(state_.c_str()));
     g_variant_builder_add(&changed, "{sv}", "Message", g_variant_new_string(message_.c_str()));
     g_variant_builder_add(&changed, "{sv}", "Level", g_variant_new_double(level_));
+    g_variant_builder_add(&changed, "{sv}", "Bands",
+        g_variant_new_fixed_array(G_VARIANT_TYPE_DOUBLE, bands_.data(), bands_.size(), sizeof(double)));
     g_variant_builder_add(&changed, "{sv}", "Shortcut", g_variant_new_string(shortcut_.c_str()));
     g_variant_builder_add(&changed, "{sv}", "FinishShortcut", g_variant_new_string(finish_shortcut_.c_str()));
     g_variant_builder_add(&changed, "{sv}", "LivePreview", g_variant_new_boolean(live_preview_));
@@ -277,6 +286,8 @@ GVariant* App::get_property(GDBusConnection*, const gchar*, const gchar*, const 
     if (g_str_equal(property, "FinishShortcut")) return g_variant_new_string(self->finish_shortcut_.c_str());
     if (g_str_equal(property, "LivePreview")) return g_variant_new_boolean(self->live_preview_);
     if (g_str_equal(property, "Level")) return g_variant_new_double(self->level_);
+    if (g_str_equal(property, "Bands"))
+        return g_variant_new_fixed_array(G_VARIANT_TYPE_DOUBLE, self->bands_.data(), self->bands_.size(), sizeof(double));
     return nullptr;
 }
 void App::method_call(GDBusConnection*, const gchar* sender, const gchar*, const gchar*, const gchar* method,

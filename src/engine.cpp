@@ -2,6 +2,7 @@
 #include "engine.hpp"
 #include "text.hpp"
 #include "streaming_text.hpp"
+#include "audio_bands.hpp"
 
 #include <pulse/pulseaudio.h>
 #include <whisper.h>
@@ -389,6 +390,7 @@ std::vector<float> capture_audio(std::atomic<bool>& stop, std::atomic<bool>& can
     auto last_level = started;
     auto last_preview = started;
     double level_energy = 0;
+    AudioBands bands;
     std::size_t level_count = 0;
     while (!cancel) {
         decoder.poll(); // A failed load/partial decode closes the microphone promptly.
@@ -411,6 +413,7 @@ std::vector<float> capture_audio(std::atomic<bool>& stop, std::atomic<bool>& can
                 const float value = values && std::isfinite(values[i]) ? std::clamp(values[i], -1.0f, 1.0f) : 0.0f;
                 samples.push_back(value); // Null data with a nonzero size is a PulseAudio hole.
                 level_energy += static_cast<double>(value) * value;
+                bands.add(value);
             }
             level_count += count;
             if (pa_stream_drop(pulse.stream) < 0) throw pulse.error("Cannot read the microphone");
@@ -421,7 +424,7 @@ std::vector<float> capture_audio(std::atomic<bool>& stop, std::atomic<bool>& can
         const auto now = Clock::now();
         if (now - last_level >= 100ms) {
             const double rms = level_count ? std::sqrt(level_energy / level_count) : 0;
-            notify(callbacks.on_level, rms);
+            notify(callbacks.on_level, rms, bands.take());
             last_level = now;
             level_energy = 0;
             level_count = 0;
@@ -581,7 +584,7 @@ struct Engine::Impl {
             terminal_state = "error";
             message = "Unexpected audio or transcription error.";
         }
-        notify(callbacks.on_level, 0.0);
+        notify(callbacks.on_level, 0.0, std::array<double, 3>{});
         cache.idle(); // All audio, hypotheses, and per-recording states are gone.
         running = false;
         notify(callbacks.on_state, std::move(terminal_state), std::move(message));

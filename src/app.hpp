@@ -27,6 +27,7 @@ private:
     std::string finish_shortcut_ = "Return";
     std::string state_ = "idle", message_ = "Ready", shell_owner_, last_transcript_;
     double level_ = 0;
+    std::array<double, 3> bands_{};
     bool building_ui_ = false, live_preview_ = true;
     std::string config_path_, data_path_, executable_;
     uint64_t generation_ = 0;

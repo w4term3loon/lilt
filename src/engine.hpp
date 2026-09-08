@@ -2,6 +2,7 @@
 #pragma once
 
 #include <functional>
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -18,7 +19,7 @@ class Engine {
 public:
     struct Callbacks {
         std::function<void(std::string, std::string)> on_state;
-        std::function<void(double)> on_level; // Raw RMS amplitude, 0–1.
+        std::function<void(double, std::array<double, 3>)> on_level; // RMS and low/mid/high bands.
         std::function<void(std::string)> on_result;
         // UTF-8 text plus the byte length of a complete-word prefix shared by
         // the previous hypothesis. It can shrink after a correction and is
