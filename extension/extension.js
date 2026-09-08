@@ -257,7 +257,7 @@ export default class RenExtension extends Extension {
             if (!this._feedback) {
                 this._orbFrame = sampleOrb(motion ? this._orbBands : [0, 0, 0],
                     motion ? (now - this._orbStarted) / 1000000 : 0,
-                    this._orbCommandMix, this._orbLoadingMix);
+                    this._orbCommandMix, this._orbLoadingMix, motion ? this._orbBands[3] : 0);
             }
             const frame = this._feedback ? this._feedbackFrame : this._orbFrame;
             const completion = this._feedback ? (motion ? (now - this._feedbackStarted) / 1000000 : 0.35) : null;
@@ -584,8 +584,8 @@ export default class RenExtension extends Extension {
         if (this._orbTimeline)
             return;
         if (!this._orbStarted) {
-            this._orbBands = [0, 0, 0];
-            this._orbVelocity = [0, 0, 0];
+            this._orbBands = [0, 0, 0, 0];
+            this._orbVelocity = [0, 0, 0, 0];
             this._orbCommandMix = 0;
             this._orbLoadingMix = this._state === 'recording' ? 0 : 1;
             this._orbStarted = GLib.get_monotonic_time();
@@ -612,15 +612,17 @@ export default class RenExtension extends Extension {
             const activity = voiceIntensity(this._proxy?.Level || 0);
             const bands = this._proxy?.Bands ?? [0, 0, 0];
             const peak = Math.max(0.001, ...bands);
-            for (let i = 0; i < 3; i++) {
-                const target = activity * bands[i] / peak;
+            // The fourth channel is loudness, independent of frequency balance.
+            for (let i = 0; i < 4; i++) {
+                const target = i === 3 ? activity : activity * bands[i] / peak;
                 // Exact critically damped spring: smooth velocity at any frame rate.
                 const offset = this._orbBands[i] - target;
                 const velocity = this._orbVelocity[i];
-                const decay = Math.exp(-14 * dt);
-                const impulse = velocity + 14 * offset;
+                const response = target > this._orbBands[i] ? 26 : 14;
+                const decay = Math.exp(-response * dt);
+                const impulse = velocity + response * offset;
                 this._orbBands[i] = target + (offset + impulse * dt) * decay;
-                this._orbVelocity[i] = (velocity - 14 * impulse * dt) * decay;
+                this._orbVelocity[i] = (velocity - response * impulse * dt) * decay;
             }
             this._wave.queue_repaint();
         });
@@ -636,7 +638,7 @@ export default class RenExtension extends Extension {
         this._orbStarted = 0;
         this._orbFrame = null;
         this._orbCommandMix = 0;
-        this._orbBands = [0, 0, 0];
+        this._orbBands = [0, 0, 0, 0];
     }
 
     _stopWave() {
