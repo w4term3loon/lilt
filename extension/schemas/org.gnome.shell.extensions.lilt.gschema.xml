@@ -6,5 +6,9 @@
       <summary>Start or finish dictation</summary>
       <description>Synchronized with the shortcut in lilt preferences.</description>
     </key>
+    <key name="cloud-position" type="(idd)">
+      <default>(-1, 1.0, 1.0)</default>
+      <summary>Cloud monitor and relative position</summary>
+    </key>
   </schema>
 </schemalist>

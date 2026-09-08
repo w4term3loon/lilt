@@ -11,6 +11,8 @@ Start with **“open browser”** to launch or focus your default browser automa
 The command stays out of the text field; the particles expand in purple, then disappear.
 Live recognition runs with Live text off too; that switch only hides inline drafts.
 
+Drag the cloud to move it; its position is remembered. Click it to finish.
+
 Audio stays in memory. No cloud transcription or recording history.
 Models download once, then work offline. Recordings are limited to three minutes.
 

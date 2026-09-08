@@ -214,7 +214,7 @@ export default class LiltExtension extends Extension {
     _makeUi() {
         this._indicator = new PanelMenu.Button(0.0, 'lilt');
         this._panelIcon = new St.Icon({
-            icon_name: 'audio-input-microphone-symbolic',
+            gicon: Gio.icon_new_for_string(`${this.path}/wren-symbolic.svg`),
             style_class: 'system-status-icon',
         });
         this._indicator.add_child(this._panelIcon);
@@ -227,7 +227,7 @@ export default class LiltExtension extends Extension {
         this._pill = new St.Button({
             style_class: 'lilt-pill',
             reactive: true,
-            can_focus: true,
+            can_focus: false,
             visible: false,
         });
         const content = new St.Widget({
@@ -251,10 +251,7 @@ export default class LiltExtension extends Extension {
         content.add_child(this._wave);
         this._pill.set_child(content);
         this._pill.connect('captured-event', (_actor, event) => this._capture(event));
-        this._pill.connect('clicked', () => {
-            if (this._state === 'recording')
-                this._call('Stop');
-        });
+        this._pill.connect('event', (_actor, event) => this._dragPill(event));
         this._pill.connect('notify::allocation', () => this._positionPill());
         Main.layoutManager.addTopChrome(this._pill);
     }
@@ -609,19 +606,74 @@ export default class LiltExtension extends Extension {
     }
 
     _stopWave() {
+        this._endDrag();
         this._stopOrb();
     }
 
+    _endDrag() {
+        this._dragGrab?.dismiss();
+        this._dragGrab = null;
+        this._drag = null;
+    }
+
+    _dragPill(event) {
+        const type = event.type();
+        if (type === Clutter.EventType.BUTTON_PRESS && event.get_button() === 1) {
+            const [x, y] = event.get_coords();
+            this._drag = {x, y, left: this._pill.x, top: this._pill.y, moved: false};
+            this._dragGrab = global.stage.grab(this._pill);
+            return Clutter.EVENT_STOP;
+        }
+        if (!this._drag)
+            return Clutter.EVENT_PROPAGATE;
+        if (type === Clutter.EventType.MOTION) {
+            const [x, y] = event.get_coords();
+            const drag = this._drag;
+            drag.moved ||= Math.hypot(x - drag.x, y - drag.y) > 5;
+            if (drag.moved) {
+                const monitor = Main.layoutManager.monitors.find(m =>
+                    x >= m.x && x < m.x + m.width && y >= m.y && y < m.y + m.height)
+                    ?? Main.layoutManager.primaryMonitor;
+                const area = Main.layoutManager.getWorkAreaForMonitor(monitor.index);
+                this._pill.set_position(
+                    Math.max(area.x, Math.min(area.x + Math.max(0, area.width - this._pill.width), drag.left + x - drag.x)),
+                    Math.max(area.y, Math.min(area.y + Math.max(0, area.height - this._pill.height), drag.top + y - drag.y)));
+                drag.monitor = monitor.index;
+            }
+            return Clutter.EVENT_STOP;
+        }
+        if (type === Clutter.EventType.BUTTON_RELEASE && event.get_button() === 1) {
+            const drag = this._drag;
+            if (drag.moved) {
+                const area = Main.layoutManager.getWorkAreaForMonitor(drag.monitor);
+                this._settings.set_value('cloud-position', new GLib.Variant('(idd)', [
+                    drag.monitor,
+                    (this._pill.x - area.x) / Math.max(1, area.width - this._pill.width),
+                    (this._pill.y - area.y) / Math.max(1, area.height - this._pill.height),
+                ]));
+            }
+            this._endDrag();
+            if (!drag.moved && this._state === 'recording')
+                this._call('Stop');
+            return Clutter.EVENT_STOP;
+        }
+        return Clutter.EVENT_PROPAGATE;
+    }
+
     _positionPill() {
-        if (!this._pill?.visible)
+        if (!this._pill?.visible || this._drag)
             return;
-        const index = this._target?.get_monitor() ?? Main.layoutManager.primaryIndex;
+        const [savedMonitor, x, y] = this._settings.get_value('cloud-position').deep_unpack();
+        const index = savedMonitor < 0 ? this._target?.get_monitor() : savedMonitor;
         const monitor = Main.layoutManager.monitors[index] ?? Main.layoutManager.primaryMonitor;
         if (!monitor)
             return;
+        const area = Main.layoutManager.getWorkAreaForMonitor(monitor.index);
+        const width = Math.max(0, area.width - this._pill.width);
+        const height = Math.max(0, area.height - this._pill.height);
         this._pill.set_position(
-            Math.round(monitor.x + (monitor.width - this._pill.width) / 2),
-            Math.round(monitor.y + monitor.height - this._pill.height - 36));
+            Math.round(area.x + (savedMonitor < 0 ? Math.max(0, width - 16) : Math.max(0, Math.min(1, x)) * width)),
+            Math.round(area.y + (savedMonitor < 0 ? Math.max(0, height - 16) : Math.max(0, Math.min(1, y)) * height)));
     }
 
     _receivePartial(text, stableBytes) {

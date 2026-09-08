@@ -46,7 +46,7 @@ def install(binary):
     with tempfile.TemporaryDirectory(prefix='.lilt-', dir=extensions) as temporary:
         prepared = Path(temporary) / uuid
         prepared.mkdir()
-        files = [*ROOT.glob('extension/*.js'), ROOT / 'extension/metadata.json',
+        files = [*ROOT.glob('extension/*.js'), *ROOT.glob('extension/*.svg'), ROOT / 'extension/metadata.json',
                  ROOT / 'extension/stylesheet.css', *ROOT.glob('extension/schemas/*.xml')]
         for source in files:
             copy(source, prepared / source.relative_to(ROOT / 'extension'))
@@ -103,6 +103,7 @@ def install(binary):
          DATA / 'icons/hicolor/scalable/apps/io.github.lilt.Dictation.svg')
     run('gdbus', 'call', '--session', '--dest', 'org.freedesktop.DBus',
         '--object-path', '/org/freedesktop/DBus', '--method', 'org.freedesktop.DBus.ReloadConfig')
+    run('gtk-update-icon-cache', '-f', '-t', str(DATA / 'icons/hicolor'))
     run('update-desktop-database', str(DATA / 'applications'))
     if not run('gnome-extensions', 'enable', uuid):
         # GNOME discovers a newly installed extension at the next login.
