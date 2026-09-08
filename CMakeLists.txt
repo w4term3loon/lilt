@@ -16,22 +16,16 @@ set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
 set(GGML_NATIVE OFF CACHE BOOL "Optimize for this CPU (local builds only)")
-# whisper.cpp otherwise enables AVX2 even with GGML_NATIVE=OFF. Release builds
-# use the baseline CPU instruction set; local users can opt into native tuning.
+# Keep GGML_NATIVE=OFF portable; local builds can opt into native CPU tuning.
 foreach(feature SSE42 AVX AVX2 BMI2 FMA F16C)
   set(GGML_${feature} OFF CACHE BOOL "Enable ${feature} (local builds only)")
 endforeach()
 set(GGML_CUDA OFF CACHE BOOL "" FORCE)
 set(GGML_METAL OFF CACHE BOOL "" FORCE)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/whisper.cpp/CMakeLists.txt")
-  # Release source archives include the corresponding pinned dependency source.
-  FetchContent_Declare(whisper SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/whisper.cpp")
-else()
-  FetchContent_Declare(whisper
-    GIT_REPOSITORY https://github.com/ggml-org/whisper.cpp.git
-    GIT_TAG 7246b7311e089fe092c4abe7cfad5d0921f8be00
-    GIT_SHALLOW FALSE)
-endif()
+FetchContent_Declare(whisper
+  GIT_REPOSITORY https://github.com/ggml-org/whisper.cpp.git
+  GIT_TAG 7246b7311e089fe092c4abe7cfad5d0921f8be00
+  GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(whisper)
 add_library(lilt_engine src/engine.cpp src/text.cpp)
 target_include_directories(lilt_engine PUBLIC src)
@@ -47,45 +41,9 @@ if(BUILD_TESTING)
   add_executable(engine_test tests/engine_test.cpp)
   target_link_libraries(engine_test PRIVATE lilt_engine)
   add_test(NAME engine COMMAND engine_test)
-  add_executable(migration_test tests/migration_test.cpp)
-  target_include_directories(migration_test PRIVATE src)
-  add_test(NAME migration COMMAND migration_test)
-  find_program(LILT_PYTHON python3)
   find_program(LILT_GJS gjs)
-  find_program(LILT_DBUS_RUN_SESSION dbus-run-session)
-  find_program(LILT_XVFB Xvfb)
   if(LILT_GJS)
     add_test(NAME extension_text
-      COMMAND "${LILT_GJS}" -m "${CMAKE_CURRENT_SOURCE_DIR}/extension/tests/test-text.js")
-    execute_process(COMMAND "${LILT_GJS}" -c
-      "imports.gi.versions.Gdk = '3.0'; imports.gi.Gdk; imports.gi.IBus;"
-      RESULT_VARIABLE LILT_GJS_GI_RESULT OUTPUT_QUIET ERROR_QUIET TIMEOUT 5)
-    if(LILT_GJS_GI_RESULT EQUAL 0)
-      foreach(test session lifecycle)
-        add_test(NAME extension_${test}
-          COMMAND "${LILT_GJS}" "${CMAKE_CURRENT_SOURCE_DIR}/extension/tests/test-${test}.js")
-      endforeach()
-    else()
-      message(STATUS "Gdk/IBus introspection unavailable; skipping extension session/lifecycle tests")
-    endif()
-  else()
-    message(STATUS "GJS unavailable; skipping extension unit tests")
-  endif()
-  if(LILT_PYTHON)
-    add_test(NAME packaging
-      COMMAND "${LILT_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_packaging.py")
-    set_tests_properties(packaging PROPERTIES
-      ENVIRONMENT "LILT_TEST_BINARY=$<TARGET_FILE:lilt>" TIMEOUT 30)
-  endif()
-  if(LILT_PYTHON AND LILT_GJS AND LILT_DBUS_RUN_SESSION AND LILT_XVFB)
-    add_test(NAME native_activation
-      COMMAND "${LILT_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_activation.py")
-    set_tests_properties(native_activation PROPERTIES
-      ENVIRONMENT "LILT_TEST_BINARY=$<TARGET_FILE:lilt>" TIMEOUT 65)
+      COMMAND "${LILT_GJS}" -m "${CMAKE_CURRENT_SOURCE_DIR}/tests/text_test.js")
   endif()
 endif()
-install(TARGETS lilt RUNTIME DESTINATION bin)
-install(PROGRAMS scripts/download-model.py DESTINATION share/lilt)
-install(FILES LICENSE THIRD_PARTY_NOTICES.md DESTINATION share/lilt)
-install(FILES LICENSES/whisper.cpp-MIT.txt DESTINATION share/lilt/LICENSES)
-install(FILES data/io.github.lilt.Dictation.svg DESTINATION share/icons/hicolor/scalable/apps)

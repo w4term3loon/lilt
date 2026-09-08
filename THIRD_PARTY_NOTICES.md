@@ -17,7 +17,7 @@ The build fetches whisper.cpp **v1.9.3**, pinned to Git tag object
 ## Whisper model weights
 
 Model files are downloaded separately on explicit user request. They are not
-included in the source repository or release archives. The downloader pins the
+included in the source repository. The downloader pins the
 publisher revision, file sizes, and SHA-256 digests.
 
 - Original model source and MIT license:
@@ -28,6 +28,5 @@ publisher revision, file sizes, and SHA-256 digests.
 ## System libraries
 
 GTK, GLib/GIO, PulseAudio client libraries, the C/C++ runtime, OpenMP runtime,
-GNOME Shell, GJS, and IBus are supplied by the operating system. Their binaries
-are not bundled in lilt's release archives. The Ubuntu package manager supplies
-their corresponding license notices and sources.
+GNOME Shell, GJS, and IBus are supplied by the operating system. The Ubuntu
+package manager supplies their corresponding license notices and sources.

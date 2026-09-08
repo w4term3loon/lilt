@@ -1,121 +1,125 @@
 #!/usr/bin/env python3
-"""Install lilt and its matching GNOME extension for one user, without sudo."""
+"""Install lilt for the current user, without sudo."""
 
 import argparse
 import ast
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 
-from install_support import (ROOT, add_layout_arguments, best_effort, copy_extension,
-                             copy_file, desktop_quote, extension_metadata,
-                             layout_from_args, refresh_desktop, write_text)
+ROOT = Path(__file__).resolve().parent.parent
+PREFIX = Path.home() / '.local'
+DATA = Path(os.environ.get('XDG_DATA_HOME') or PREFIX / 'share')
 
 
-def enable_extension(uuid):
-    # The old extension must not compete for the shortcut after the rename.
-    best_effort(['gnome-extensions', 'disable', 'ptt@local'])
-    if best_effort(['gnome-extensions', 'enable', uuid]):
-        print('Extension enabled. Log out and back in to load updated modules after an upgrade.')
-        return
-    if shutil.which('gsettings'):
-        try:
-            current = subprocess.check_output(
-                ['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions'], text=True, timeout=5).strip()
-            if current.startswith('@as '):
-                current = current[4:]
-            entries = ast.literal_eval(current)
-            if not isinstance(entries, list) or not all(isinstance(value, str) for value in entries):
-                raise ValueError('Unexpected enabled-extensions value')
-            entries = [entry for entry in entries if entry != 'ptt@local']
-            if uuid not in entries:
-                entries.append(uuid)
-            subprocess.run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions', repr(entries)],
-                           check=True, timeout=5)
-        except (subprocess.SubprocessError, ValueError, SyntaxError):
-            print('Enable lilt manually in the Extensions app after logging back in.')
-    print('Log out and back in once so GNOME discovers the extension.')
-
-
-def install(args):
-    layout = layout_from_args(args)
-    binary = args.binary or next((path for path in (ROOT / 'bin/lilt', ROOT / 'build/lilt')
-                                if path.is_file()), ROOT / 'build/lilt')
-    if not binary.is_file():
-        raise ValueError('Build first: ./scripts/build.sh (or use --binary PATH).')
-    if not shutil.which('glib-compile-schemas'):
-        raise ValueError('glib-compile-schemas is required (Ubuntu package: libglib2.0-bin).')
-    metadata = extension_metadata()
-    uuid = metadata['uuid']
-    # Validate all required payload files before changing an installed executable.
-    required = [ROOT / 'LICENSE', ROOT / 'THIRD_PARTY_NOTICES.md',
-                ROOT / 'LICENSES/whisper.cpp-MIT.txt', ROOT / 'data/io.github.lilt.Dictation.svg',
-                *(ROOT / 'scripts' / name for name in ('download-model.py', 'uninstall.py', 'install_support.py'))]
-    for source in required:
-        if not source.is_file():
-            raise ValueError('Incomplete lilt installation payload: ' + str(source))
-    extension_target = layout.staged(layout.data / 'gnome-shell/extensions' / uuid)
-    extension_target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.lilt-', dir=extension_target.parent) as work:
-        prepared = Path(work) / uuid
-        copy_extension(prepared)
-        copy_file(binary, layout.staged(layout.binary), 0o755)
-        for name in ('download-model.py', 'uninstall.py', 'install_support.py'):
-            copy_file(ROOT / 'scripts' / name, layout.staged(layout.assets / name), 0o755)
-        for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
-            copy_file(ROOT / name, layout.staged(layout.assets / name))
-        copy_file(ROOT / 'LICENSES/whisper.cpp-MIT.txt', layout.staged(layout.assets / 'LICENSES/whisper.cpp-MIT.txt'))
-        write_text(layout.staged(layout.assets / 'install.json'), json.dumps(
-            {'prefix': str(layout.prefix), 'data': str(layout.data), 'uuid': uuid}, indent=2) + '\n')
-        copy_file(ROOT / 'data/io.github.lilt.Dictation.svg',
-                  layout.staged(layout.data / 'icons/hicolor/scalable/apps/io.github.lilt.Dictation.svg'))
-        # Replace the runtime directory as a unit, removing stale modules while
-        # keeping the prior installation intact until schema compilation passes.
-        backup = Path(work) / 'previous'
-        if extension_target.exists() or extension_target.is_symlink():
-            extension_target.rename(backup)
-        try:
-            prepared.rename(extension_target)
-        except OSError:
-            if backup.exists() or backup.is_symlink():
-                backup.rename(extension_target)
-            raise
-    launch = desktop_quote(str(layout.binary))
-    applications = layout.staged(layout.data / 'applications')
-    applications.mkdir(parents=True, exist_ok=True)
-    write_text(layout.staged(layout.data / 'applications/io.github.lilt.Dictation.desktop'),
-        '[Desktop Entry]\nType=Application\nName=lilt\nComment=Local voice typing\n'
-        f'Exec={launch}\nIcon=io.github.lilt.Dictation\nTerminal=false\nCategories=Utility;Accessibility;\n'
-        'StartupNotify=true\n')
-    services = layout.staged(layout.data / 'dbus-1/services')
-    services.mkdir(parents=True, exist_ok=True)
-    service_launch = shlex.quote(str(layout.binary)).replace('\\', '\\\\')
-    write_text(layout.staged(layout.data / 'dbus-1/services/io.github.lilt.Dictation.service'),
-        '[D-BUS Service]\nName=io.github.lilt.Dictation\n'
-        f'Exec={service_launch} --daemon\n')
-    if not args.destdir and not args.no_enable:
-        refresh_desktop(layout)
-        enable_extension(uuid)
-    print(('Staged' if args.destdir else 'Installed') + ' lilt: ' + str(layout.staged(layout.binary)))
-    print('Model: python3 ' + str(layout.assets / 'download-model.py'))
-    print('Remove: python3 ' + str(layout.assets / 'uninstall.py'))
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_layout_arguments(parser)
-    parser.add_argument('--binary', type=Path, help='executable to install (default: bin/lilt or build/lilt)')
-    args = parser.parse_args(argv)
+def run(*command):
     try:
-        install(args)
-    except (OSError, ValueError, argparse.ArgumentTypeError, subprocess.SubprocessError) as error:
-        parser.exit(1, 'Installation failed: ' + str(error) + '\n')
-    return 0
+        return subprocess.run(command, check=False, capture_output=True, timeout=5).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def copy(source, target):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as temporary:
+        staged = Path(temporary.name)
+    try:
+        shutil.copy2(source, staged)
+        staged.replace(target)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def install(binary):
+    if not binary.is_file():
+        raise ValueError('Build first: ./scripts/build.sh')
+    if not DATA.is_absolute():
+        raise ValueError('XDG_DATA_HOME must be an absolute path.')
+    uuid = json.loads((ROOT / 'extension/metadata.json').read_text())['uuid']
+    extensions = DATA / 'gnome-shell/extensions'
+    extensions.mkdir(parents=True, exist_ok=True)
+    target = extensions / uuid
+    with tempfile.TemporaryDirectory(prefix='.lilt-', dir=extensions) as temporary:
+        prepared = Path(temporary) / uuid
+        prepared.mkdir()
+        files = [*ROOT.glob('extension/*.js'), ROOT / 'extension/metadata.json',
+                 ROOT / 'extension/stylesheet.css', *ROOT.glob('extension/schemas/*.xml')]
+        for source in files:
+            copy(source, prepared / source.relative_to(ROOT / 'extension'))
+        copy(ROOT / 'LICENSE', prepared / 'LICENSE')
+        subprocess.run(['glib-compile-schemas', '--strict', str(prepared / 'schemas')], check=True)
+        copy(binary, PREFIX / 'bin/lilt')
+        for name in ('download-model.py', 'uninstall.py'):
+            copy(ROOT / 'scripts' / name, PREFIX / 'share/lilt' / name)
+        for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'LICENSES/whisper.cpp-MIT.txt'):
+            copy(ROOT / name, PREFIX / 'share/lilt' / name)
+        previous = Path(temporary) / 'previous'
+        if target.exists():
+            target.rename(previous)
+        try:
+            prepared.rename(target)
+        except OSError:
+            if previous.exists():
+                previous.rename(target)
+            raise
+
+    # A stale PTT service starts lilt under the wrong bus name and times out.
+    run('gnome-extensions', 'disable', 'ptt@local')
+    legacy = extensions / 'ptt@local'
+    if legacy.is_symlink():
+        legacy.unlink()
+    elif legacy.exists():
+        shutil.rmtree(legacy)
+    for directory, suffix in (('dbus-1/services', 'service'), ('applications', 'desktop')):
+        (DATA / directory / f'io.github.ptt.Dictation.{suffix}').unlink(missing_ok=True)
+    alias = PREFIX / 'bin/ptt'
+    if alias.is_symlink() and alias.resolve() == PREFIX / 'bin/lilt':
+        alias.unlink()
+    for obsolete in ('install_support.py', 'install.json'):
+        (PREFIX / 'share/lilt' / obsolete).unlink(missing_ok=True)
+
+    binary = PREFIX / 'bin/lilt'
+    # Desktop Exec and D-Bus Exec use different quoting rules.
+    quoted = str(binary).replace('\\', '\\\\').replace('"', '\\"').replace('`', '\\`').replace('$', '\\$').replace('%', '%%')
+    quoted = '"' + quoted.replace('\\', '\\\\') + '"'
+    service_command = shlex.quote(str(binary)).replace('\\', '\\\\')
+    registrations = {
+        'applications/io.github.lilt.Dictation.desktop':
+            '[Desktop Entry]\nType=Application\nName=lilt\n'
+            f'Exec={quoted}\nIcon=io.github.lilt.Dictation\nTerminal=false\nCategories=Utility;Accessibility;\n',
+        'dbus-1/services/io.github.lilt.Dictation.service':
+            '[D-BUS Service]\nName=io.github.lilt.Dictation\n'
+            f'Exec={service_command} --daemon\n',
+    }
+    for name, content in registrations.items():
+        path = DATA / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    copy(ROOT / 'data/io.github.lilt.Dictation.svg',
+         DATA / 'icons/hicolor/scalable/apps/io.github.lilt.Dictation.svg')
+    run('gdbus', 'call', '--session', '--dest', 'org.freedesktop.DBus',
+        '--object-path', '/org/freedesktop/DBus', '--method', 'org.freedesktop.DBus.ReloadConfig')
+    run('update-desktop-database', str(DATA / 'applications'))
+    if not run('gnome-extensions', 'enable', uuid):
+        # GNOME discovers a newly installed extension at the next login.
+        current = subprocess.check_output(['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions'],
+                                          text=True, timeout=5).strip().removeprefix('@as ')
+        enabled = [entry for entry in ast.literal_eval(current) if entry not in ('ptt@local', uuid)]
+        subprocess.run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions', repr([*enabled, uuid])],
+                       check=True, timeout=5)
+        print('Log out and back in to load the extension.')
+    print('Installed lilt. Log out and back in after an upgrade.')
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--binary', type=Path, default=ROOT / 'build/lilt')
+    args = parser.parse_args()
+    try:
+        install(args.binary)
+    except (OSError, ValueError, SyntaxError, subprocess.SubprocessError) as error:
+        parser.exit(1, f'Installation failed: {error}\n')

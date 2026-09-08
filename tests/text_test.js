@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import {insertionText, compositionParts} from '../text.js';
+import {insertionText, compositionParts} from '../extension/text.js';
 
 function assert(condition, message) {
     if (!condition)

@@ -1,7 +1,6 @@
 #include "engine.hpp"
 #include "text.hpp"
 #include "streaming_text.hpp"
-#include <whisper.h>
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -266,90 +265,15 @@ void lifecycle_tests(const std::filesystem::path& directory) {
     expect(std::chrono::steady_clock::now() - started < 3s, "Destruction must release the worker promptly");
 }
 
-// Optional integration with caller-supplied weights/audio; the normal test never
-// downloads a model. Removing a temporary symlink distinguishes weight reuse
-// from reloading without adding observability knobs to the production engine.
-void model_tests(const std::filesystem::path& directory, const char* model, const char* audio) {
-    struct Logs {
-        std::atomic<int> loads{0}, states{0};
-        Logs() {
-            whisper_log_set([](ggml_log_level, const char* text, void* data) {
-                auto& logs = *static_cast<Logs*>(data);
-                if (std::strstr(text, "whisper_model_load: loading model")) ++logs.loads;
-                if (std::strstr(text, "whisper_init_state: compute buffer (decode)")) ++logs.states;
-            }, this);
-        }
-        ~Logs() { whisper_log_set(nullptr, nullptr); }
-    } logs;
-    const auto rss_kib = [] {
-        std::ifstream status("/proc/self/statm");
-        std::size_t total = 0, resident = 0;
-        status >> total >> resident;
-        return resident * static_cast<std::size_t>(sysconf(_SC_PAGESIZE)) / 1024;
-    };
-    const auto link = directory / "selected-model.bin";
-    const auto restore = [&] { std::filesystem::create_symlink(std::filesystem::absolute(model), link); };
-    restore();
-    lilt::Engine engine;
-    const auto baseline_rss = rss_kib();
-    const auto cold = engine.transcribe_file(link.string(), audio, 4);
-    expect(!cold.empty() && logs.loads == 1 && logs.states == 1, "Cold replay loads weights and one state");
-    std::filesystem::remove(link);
-    const auto warm = engine.transcribe_file(link.string(), audio, 4);
-    expect(warm == cold && logs.loads == 1 && logs.states == 2,
-           "Warm replay reuses weights with a fresh, independent decoder state");
-    const auto warm_rss = rss_kib();
-    engine.release_model();
-    const auto cleared_rss = rss_kib();
-    expect_error([&] { engine.transcribe_file(link.string(), audio, 4); }, "Explicit release drops weights");
-
-    restore();
-    engine.transcribe_file(link.string(), audio, 4);
-    engine.transcribe((directory / "another-model.bin").string(), {});
-    std::filesystem::remove(link);
-    expect_error([&] { engine.transcribe_file(link.string(), audio, 4); },
-                 "Changing the selected model releases previous weights even for silence");
-
-    restore();
-    const auto states = logs.states.load();
-    auto replay = std::async(std::launch::async, [&] {
-        return engine.transcribe_file(link.string(), audio, 4);
-    });
-    wait_until([&] { return logs.states > states; }, 15s, "Replay initializes a fresh state");
-    expect(!engine.start(link.string(), 4, {}), "Capture rejects replay overlap");
-    expect_error([&] { engine.transcribe(link.string(), {}); }, "A second replay is rejected");
-    engine.release_model(); // The active decoder keeps its weights safely.
-    engine.cancel();
-    expect(replay.wait_for(10s) == std::future_status::ready && replay.get().empty(),
-           "Replay cancellation suppresses output and releases its state");
-    expect(!engine.busy(), "Cancelled replay returns to idle");
-    std::filesystem::remove(link);
-    expect_error([&] { engine.transcribe_file(link.string(), audio, 4); },
-                 "Clearing during decode must not repopulate the cache");
-
-    restore();
-    engine.transcribe_file(link.string(), audio, 4);
-    std::filesystem::remove(link);
-    std::cout << "Real-model reuse, fresh states, release, replacement, overlap and cancel passed. "
-              << "RSS KiB baseline=" << baseline_rss << " warm=" << warm_rss
-              << " cleared=" << cleared_rss << "; checking 60-second expiry..." << std::endl;
-    std::this_thread::sleep_for(61s);
-    const auto expired_rss = rss_kib();
-    expect_error([&] { engine.transcribe_file(link.string(), audio, 4); }, "Idle cache expires after 60 seconds");
-    std::cout << "Idle expiry passed; RSS KiB expired=" << expired_rss << ".\n";
-}
-
 } // namespace
 
-int main(int argc, char** argv) {
+int main() {
     try {
-        if (argc != 1 && argc != 3) throw std::runtime_error("Usage: engine_test [MODEL WAV]");
         TemporaryDirectory directory;
         text_tests();
         preview_tests();
         audio_tests(directory.path);
         lifecycle_tests(directory.path);
-        if (argc == 3) model_tests(directory.path, argv[1], argv[2]);
         std::cout << "Text safety, preview boundaries/coalescing, WAV validation, silence gating, and capture cancellation passed.\n";
         return 0;
     } catch (const std::exception& error) {
