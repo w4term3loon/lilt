@@ -12,6 +12,11 @@ export function isBrowserCommand(text) {
     return /^open browser[.!?]*$/i.test(insertionText(text));
 }
 
+export function isBrowserCommandPreview(text) {
+    const phrase = insertionText(text).toLowerCase().replace(/[.!?]+$/, '');
+    return phrase === 'open' || (phrase.startsWith('open ') && 'open browser'.startsWith(phrase));
+}
+
 // stableBytes is a UTF-8 prefix length, not a JavaScript UTF-16 index. Keep
 // complete characters and sanitize controls without truncating composition.
 export function compositionParts(text, stableBytes) {

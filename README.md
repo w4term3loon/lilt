@@ -9,6 +9,7 @@ Live text. Keep the destination field focused while dictating.
 
 Say only **“open browser”**, then finish, to launch or focus your default browser
 instead of inserting text. Longer sentences remain ordinary dictation.
+With Live text enabled, the orb turns purple when “open” is recognized.
 
 Audio stays in memory. No cloud transcription, clipboard, or recording history.
 Models download once, then work offline. Recordings are limited to three minutes.

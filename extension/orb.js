@@ -19,7 +19,7 @@ export function voiceIntensity(rms) {
     return signal / (1 + signal);
 }
 
-export function drawOrb(context, width, height, bands, elapsed) {
+export function drawOrb(context, width, height, bands, elapsed, command = false) {
     const turn = elapsed * 0.12;
     const cosine = Math.cos(turn);
     const sine = Math.sin(turn);
@@ -47,11 +47,16 @@ export function drawOrb(context, width, height, bands, elapsed) {
         const {x, y} = point;
         const size = point.size * (0.75 + depth * 0.5);
         // A narrow outline keeps the transparent orb legible over pale windows.
-        context.setSourceRGBA(0.08, 0.24, 0.23, 0.15 + depth * 0.12);
+        context.setSourceRGBA(command ? 0.22 : 0.08, command ? 0.10 : 0.24,
+            command ? 0.34 : 0.23, 0.15 + depth * 0.12);
         context.arc(x, y, size + 0.45, 0, Math.PI * 2);
         context.fill();
-        context.setSourceRGBA(0.24 + depth * 0.28, 0.64 + depth * 0.26,
-            0.57 + depth * 0.25 + point.high * 0.12, 0.32 + depth * 0.62);
+        if (command)
+            context.setSourceRGBA(0.58 + depth * 0.22, 0.33 + depth * 0.26,
+                0.83 + depth * 0.15, 0.32 + depth * 0.62);
+        else
+            context.setSourceRGBA(0.24 + depth * 0.28, 0.64 + depth * 0.26,
+                0.57 + depth * 0.25 + point.high * 0.12, 0.32 + depth * 0.62);
         context.arc(x, y, size, 0, Math.PI * 2);
         context.fill();
     }

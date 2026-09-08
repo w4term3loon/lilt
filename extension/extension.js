@@ -12,7 +12,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
-import {insertionText, isBrowserCommand} from './text.js';
+import {insertionText, isBrowserCommand, isBrowserCommandPreview} from './text.js';
 import {Composition} from './composition.js';
 import {drawOrb, voiceIntensity} from './orb.js';
 
@@ -243,7 +243,8 @@ export default class LiltExtension extends Extension {
             const context = this._wave.get_context();
             const [width, height] = this._wave.get_surface_size();
             drawOrb(context, width, height, this._orbBands ?? [0, 0, 0],
-                (GLib.get_monotonic_time() - (this._orbStarted ?? 0)) / 1000000);
+                (GLib.get_monotonic_time() - (this._orbStarted ?? 0)) / 1000000,
+                isBrowserCommandPreview(this._latestPartial?.text ?? ''));
             context.$dispose();
         });
         content.add_child(this._wave);
