@@ -47,6 +47,7 @@ when loaded. Custom files stay in their original location.
 
 The cloud listens, the ring processes, and purple expansion recognizes a command.
 On completion, the ring gathers into one dot and fades. Clipboard output also shows a notification.
+Ren respects Ubuntu’s animation setting.
 
 ## Project
 

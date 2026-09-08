@@ -14,7 +14,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import {insertionText, isBrowserCommand, isBrowserCommandPreview, startsBrowserCommand} from './text.js';
 import {Composition} from './composition.js';
-import {drawOrb, voiceIntensity} from './orb.js';
+import {drawOrb, sampleOrb, voiceIntensity} from './orb.js';
 
 const BUS_NAME = 'io.github.ren.Dictation';
 const BUS_PATH = '/io/github/ren/Dictation';
@@ -121,6 +121,11 @@ export default class RenExtension extends Extension {
         this._sources = new Set();
         this._heldKeys = new Set();
         this._settings = this.getSettings();
+        this._motionSettings = new Gio.Settings({schema_id: 'org.gnome.desktop.interface'});
+        this._motionSignal = this._motionSettings.connect('changed::enable-animations', () => {
+            this._stopOrb();
+            this._drawState();
+        });
         this._makeUi();
         this._bindShortcut();
         this._settingsSignal = this._settings.connect('changed::toggle-shortcut',
@@ -158,6 +163,7 @@ export default class RenExtension extends Extension {
     disable() {
         this._enabled = false;
         this._feedback = '';
+        this._feedbackFrame = null;
         this._enableGeneration++;
         this._generation++;
         this._cancellable.cancel();
@@ -190,6 +196,8 @@ export default class RenExtension extends Extension {
         this._partialSignal = 0;
         this._proxyPropertySignal = 0;
         this._proxyOwnerSignal = 0;
+        this._motionSettings.disconnect(this._motionSignal);
+        this._motionSettings = null;
         this._settings.disconnect(this._settingsSignal);
         Main.wm.removeKeybinding('toggle-shortcut');
         this._settings = null;
@@ -244,9 +252,17 @@ export default class RenExtension extends Extension {
         this._wave.connect('repaint', () => {
             const context = this._wave.get_context();
             const [width, height] = this._wave.get_surface_size();
-            drawOrb(context, width, height, this._orbBands ?? [0, 0, 0],
-                (GLib.get_monotonic_time() - (this._orbStarted ?? 0)) / 1000000,
-                this._orbCommandMix ?? 0, this._orbLoadingMix ?? 0, this._feedback ?? '', this._feedbackPhase ?? 0);
+            const motion = this._motionSettings.get_boolean('enable-animations');
+            const now = GLib.get_monotonic_time();
+            if (!this._feedback) {
+                this._orbFrame = sampleOrb(motion ? this._orbBands : [0, 0, 0],
+                    motion ? (now - this._orbStarted) / 1000000 : 0,
+                    this._orbCommandMix, this._orbLoadingMix);
+            }
+            const frame = this._feedback ? this._feedbackFrame : this._orbFrame;
+            const completion = this._feedback ? (motion ? (now - this._feedbackStarted) / 1000000 : 0.35) : null;
+            if (frame)
+                drawOrb(context, width, height, frame, completion);
             context.$dispose();
         });
         content.add_child(this._wave);
@@ -358,6 +374,7 @@ export default class RenExtension extends Extension {
         if (this._inserting || this._session)
             return false;
         this._feedback = '';
+        this._feedbackFrame = null;
         this._stopWave();
         this._clearTarget();
         this._target = global.display.focus_window;
@@ -537,7 +554,9 @@ export default class RenExtension extends Extension {
 
     _drawState() {
         const recording = this._state === 'recording';
-        const active = ACTIVE.has(this._state) || (this._commandAnimating && !this._cancelled) || Boolean(this._feedback);
+        const finishing = this._session && !this._cancelled && (this._pendingText !== null || this._inserting);
+        const active = ACTIVE.has(this._state) || finishing ||
+            (this._commandAnimating && !this._cancelled) || Boolean(this._feedback);
         this._recordItem.label.text = recording ? 'Finish dictation' : 'Start dictation';
         this._recordItem.setSensitive(!active || recording);
         this._panelIcon[recording ? 'add_style_class_name' : 'remove_style_class_name']('ren-panel-recording');
@@ -564,14 +583,21 @@ export default class RenExtension extends Extension {
     _startOrb() {
         if (this._orbTimeline)
             return;
-        this._orbBands = [0, 0, 0];
-        this._orbVelocity = [0, 0, 0];
-        this._orbCommandMix = 0;
-        this._orbLoadingMix = this._state === 'recording' ? 0 : 1;
-        this._orbStarted = GLib.get_monotonic_time();
-        let lastFrame = this._orbStarted;
+        if (!this._orbStarted) {
+            this._orbBands = [0, 0, 0];
+            this._orbVelocity = [0, 0, 0];
+            this._orbCommandMix = 0;
+            this._orbLoadingMix = this._state === 'recording' ? 0 : 1;
+            this._orbStarted = GLib.get_monotonic_time();
+        }
         this._wave.queue_repaint();
-        // Follow the display's frame clock instead of an independent 25 Hz timer.
+        if (!this._motionSettings.get_boolean('enable-animations')) {
+            this._orbCommandMix = Number(this._orbCommandPreview ?? false);
+            this._orbLoadingMix = this._state !== 'recording' && !this._autoCommand ? 1 : 0;
+            return;
+        }
+        let lastFrame = GLib.get_monotonic_time();
+        // Follow GNOME's display frame clock.
         this._orbTimeline = new Clutter.Timeline({actor: this._wave, duration: 1000, repeat_count: -1});
         this._orbFrameSignal = this._orbTimeline.connect('new-frame', () => {
             const now = GLib.get_monotonic_time();
@@ -607,8 +633,8 @@ export default class RenExtension extends Extension {
             this._orbTimeline.disconnect(this._orbFrameSignal);
             this._orbTimeline = null;
         }
-        this._wave?.remove_all_transitions();
-        this._wave?.set_scale(1, 1);
+        this._orbStarted = 0;
+        this._orbFrame = null;
         this._orbCommandMix = 0;
         this._orbBands = [0, 0, 0];
     }
@@ -620,10 +646,12 @@ export default class RenExtension extends Extension {
     _positionPill() {
         if (!this._pill?.visible)
             return;
-        const index = this._target?.get_monitor() ?? Main.layoutManager.primaryIndex;
+        const index = this._target?.get_monitor() ??
+            (this._feedback ? this._orbMonitor : null) ?? Main.layoutManager.primaryIndex;
         const monitor = Main.layoutManager.monitors[index] ?? Main.layoutManager.primaryMonitor;
         if (!monitor)
             return;
+        this._orbMonitor = monitor.index;
         const area = Main.layoutManager.getWorkAreaForMonitor(monitor.index);
         this._pill.set_position(
             Math.round(area.x + Math.max(0, area.width - this._pill.width - 16)),
@@ -706,9 +734,11 @@ export default class RenExtension extends Extension {
             const openBrowser = isBrowserCommand(text);
             this._pendingText = null;
             this._inserting = true;
-            this._feedbackPhase = (GLib.get_monotonic_time() - (this._orbStarted ?? 0)) / 1000000;
-            this._stopWave();
-            this._pill.hide();
+            // Keep the same particles on screen while input-method cleanup finishes.
+            if (!text || openBrowser) {
+                this._stopWave();
+                this._pill.hide();
+            }
             if (this._sessionLive) {
                 let inserted = false;
                 try {
@@ -732,6 +762,8 @@ export default class RenExtension extends Extension {
                         this._bindShortcut();
                         if (inserted)
                             this._showFeedback('inserted');
+                        else
+                            this._drawState();
                         if (openBrowser && !this._cancelled)
                             this._openBrowser();
                     }
@@ -766,13 +798,16 @@ export default class RenExtension extends Extension {
     }
 
     _showFeedback(kind) {
+        this._feedbackFrame = this._orbFrame ?? sampleOrb([0, 0, 0], 0, 0, 1);
+        this._feedbackStarted = GLib.get_monotonic_time();
         this._feedback = kind;
         this._drawState();
         const generation = this._generation;
-        this._later(720, () => {
+        this._later(this._motionSettings.get_boolean('enable-animations') ? 620 : 220, () => {
             if (generation !== this._generation || this._session)
                 return;
             this._feedback = '';
+            this._feedbackFrame = null;
             this._drawState();
         });
     }
@@ -811,12 +846,14 @@ export default class RenExtension extends Extension {
             if (Main.inputMethod.currentFocus) {
                 Main.inputMethod.commit(text);
                 this._clearTarget();
+                this._showFeedback('inserted');
                 return;
             }
             const shellContext = Main.inputMethod._context?.get_object_path();
             if (this._ibusContext && this._ibusPanel && this._ibusContext !== shellContext) {
                 this._ibusPanel.commit_text(IBus.Text.new_from_string(text));
                 this._clearTarget();
+                this._showFeedback('inserted');
                 return;
             }
         } catch (error) {
