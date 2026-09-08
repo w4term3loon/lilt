@@ -31,11 +31,14 @@ const wisps = Array.from({length: 72}, (_, i) => ({
 const warm = [[191, 75, 38], [237, 132, 56], [255, 225, 162]];
 const purple = [[119, 33, 111], [176, 102, 180], [234, 216, 250]];
 const mix = (a, b, t) => a.map((value, i) => value + (b[i] - value) * t);
+const brightness = rgb => rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
 const tones = wisps.map((_, index) => {
     const t = ((index * 37) % 72) / 71;
     const tint = palette => (t < 0.65 ? mix(palette[0], palette[1], t / 0.65)
         : mix(palette[1], palette[2], (t - 0.65) / 0.35)).map(value => value / 255);
-    return {warm: tint(warm), purple: tint(purple)};
+    const color = tint(warm);
+    const pale = (brightness(color) * 255 - brightness(warm[0])) / (brightness(warm[2]) - brightness(warm[0]));
+    return {warm: color, purple: tint(purple), weight: 0.55 + 1.35 * pale};
 });
 
 export function voiceIntensity(rms) {
@@ -54,24 +57,38 @@ export function sampleOrb(bands, elapsed, command = 0, loading = 0, voice = unde
     loading = unit(loading);
     const activity = unit(voice ?? Math.max(...bands));
     const color = mix(tones[35].warm, tones[35].purple, command);
-    const quiet = 1 - 0.85 * activity;
     const centers = clusters.map(cluster => ({
-        x: cluster.x + 3.2 * quiet * noise(elapsed * 0.22 + cluster.phase),
-        y: cluster.y + 2.8 * quiet * noise(elapsed * 0.22 + cluster.phase + 200),
+        x: cluster.x + 3.2 * noise(elapsed * 0.22 + cluster.phase),
+        y: cluster.y + 2.8 * noise(elapsed * 0.22 + cluster.phase + 200),
     }));
-    // Loudness opens the cloud upward from a stable lower edge. Frequency energy
-    // changes aspect slightly; it never drives unrelated random motion.
-    const width = 1 + activity * 0.35 + bands[0] * 0.12;
-    const height = 1 + activity * 0.7 + bands[1] * 0.08;
     const spacing = 1.3 * 1.15;
+    const base = wisps.map(wisp => {
+        const center = centers[wisp.cluster];
+        return {
+            x: (center.x + wisp.x + 0.9 * noise(elapsed * 0.65 + wisp.phase)) * spacing,
+            y: (center.y + wisp.y + 0.9 * noise(elapsed * 0.65 + wisp.phase + 300)) * spacing,
+        };
+    });
+    const center = {x: 0, y: 0};
+    for (const point of base) {
+        center.x += point.x / base.length;
+        center.y += point.y / base.length;
+    }
+    let energy = 0, weightedEnergy = 0;
+    for (let i = 0; i < base.length; i++) {
+        base[i].x -= center.x;
+        base[i].y -= center.y;
+        const radiusSquared = base[i].x ** 2 + base[i].y ** 2;
+        energy += radiusSquared;
+        weightedEnergy += radiusSquared * tones[i].weight ** 2;
+    }
+    // Paler pearls lead the radial motion; command colors retain the same weights.
+    const strength = 1.35 * activity * Math.sqrt(energy / weightedEnergy);
     const expansion = 1 + 1.3 * command;
     const dots = wisps.map((wisp, index) => {
-        const center = centers[wisp.cluster];
-        const baseX = (center.x + wisp.x + quiet * 0.9 * noise(elapsed * 0.65 + wisp.phase)) * spacing;
-        const baseY = (center.y + wisp.y + quiet * 0.9 * noise(elapsed * 0.65 + wisp.phase + 300)) * spacing;
-        const cloudX = baseX * width;
-        const cloudY = 24 + (baseY - 24) * height
-            - bands[2] * 1.4 * Math.min(1, Math.abs(baseX) / 20);
+        const scale = 1 + strength * tones[index].weight;
+        const cloudX = base[index].x * scale;
+        const cloudY = base[index].y * scale;
         const angle = index / wisps.length * Math.PI * 2 + elapsed * 3;
         let x = (cloudX + (20 * Math.cos(angle) - cloudX) * loading) * expansion;
         let y = (cloudY + (20 * Math.sin(angle) - cloudY) * loading) * expansion;
