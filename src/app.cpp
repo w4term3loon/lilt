@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <functional>
+#include <fstream>
 #include <thread>
 #include <unistd.h>
 #include <csignal>
@@ -42,9 +43,9 @@ void NativeApplication::unregister_bus(GApplication* application, GDBusConnectio
 namespace {
 constexpr auto kPath = "/io/github/lilt/Dictation";
 constexpr auto kInterface = "io.github.lilt.Dictation";
-constexpr struct { const char* id; const char* title; } kModels[] = {
-    {"tiny.en-q5_1", "Tiny"}, {"base.en-q5_1", "Base"},
-    {"small.en-q5_1", "Small"}, {"medium.en-q5_0", "Medium"},
+constexpr struct { const char* id; const char* title; guint64 bytes; } kModels[] = {
+    {"tiny.en-q5_1", "Tiny", 32166155}, {"base.en-q5_1", "Base", 59721011},
+    {"small.en-q5_1", "Small", 190098681}, {"medium.en-q5_0", "Medium", 539225533},
 };
 constexpr auto kXml = R"(<node><interface name="io.github.lilt.Dictation">
 <method name="Toggle"/><method name="Stop"/><method name="Cancel"/>
@@ -210,7 +211,7 @@ void App::toggle() {
         show(); return;
     }
     if (!g_file_test(model_path().c_str(), G_FILE_TEST_IS_REGULAR)) {
-        set_state("error", "Download a voice model first."); show(); return;
+        set_state("error", "Choose or download a voice model first."); show(); return;
     }
     const auto generation = ++generation_;
     const auto owner = shell_owner_;
@@ -318,7 +319,7 @@ void App::method_call(GDBusConnection*, const gchar* sender, const gchar*, const
     g_dbus_method_invocation_return_value(invocation, nullptr);
 }
 
-std::string App::model_path() const { return data_path_ + "/models/ggml-" + model_ + ".bin"; }
+std::string App::model_path() const { return model_ == "custom" ? custom_model_ : data_path_ + "/models/ggml-" + model_ + ".bin"; }
 void App::load_config() {
     GKeyFile* file = g_key_file_new();
     const bool loaded = g_key_file_load_from_file(file, config_path_.c_str(), G_KEY_FILE_NONE, nullptr);
@@ -328,7 +329,7 @@ void App::load_config() {
         const char* group = g_key_file_has_group(file, "lilt") ? "lilt" :
             g_key_file_has_group(file, "LILT") ? "LILT" : "PTT";
         auto read = [&](const char* key, std::string& out) { auto v = take(g_key_file_get_string(file, group, key, nullptr)); if (!v.empty()) out = v; };
-        read("model", model_); read("shortcut", shortcut_);
+        read("custom_model", custom_model_); read("model", model_); read("shortcut", shortcut_);
         migrate = std::string(group) != "lilt" || take(g_key_file_get_string(file, group, "language", nullptr)) != "en";
         read("finish_shortcut", finish_shortcut_);
         if (g_key_file_has_key(file, group, "live_preview", nullptr)) {
@@ -342,7 +343,7 @@ void App::load_config() {
     const std::string legacy[] = {"tiny-q5_1", "base-q5_1", "small-q5_1", "medium-q5_0"};
     if (std::find(std::begin(legacy), std::end(legacy), model_) != std::end(legacy))
         model_.insert(model_.find('-'), ".en");
-    if (std::none_of(std::begin(kModels), std::end(kModels),
+    if (model_ != "custom" && std::none_of(std::begin(kModels), std::end(kModels),
         [this](const auto& model) { return model_ == model.id; })) model_ = "small.en-q5_1";
     g_key_file_unref(file);
     if (loaded && (migrate || model_ != previous_model)) save_config();
@@ -351,6 +352,7 @@ void App::save_config() {
     g_mkdir_with_parents((std::string(g_get_user_config_dir()) + "/lilt").c_str(), 0700);
     GKeyFile* file = g_key_file_new();
     g_key_file_set_string(file, "lilt", "model", model_.c_str());
+    g_key_file_set_string(file, "lilt", "custom_model", custom_model_.c_str());
     g_key_file_set_string(file, "lilt", "language", "en");
     g_key_file_set_string(file, "lilt", "shortcut", shortcut_.c_str());
     g_key_file_set_string(file, "lilt", "finish_shortcut", finish_shortcut_.c_str());
@@ -422,12 +424,17 @@ void App::build_ui() {
     model_combo_ = gtk_combo_box_text_new();
     for (const auto& model : kModels)
         gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(model_combo_), model.id, model.title);
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(model_combo_), "custom", "Custom file…");
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(model_combo_), model_.c_str());
     GList* cells = gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(model_combo_));
     for (GList* cell = cells; cell; cell = cell->next) g_object_set(cell->data, "xalign", 0.5f, nullptr);
     g_list_free(cells);
     auto* model_controls = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     pack(model_controls, model_combo_);
+    model_details_ = gtk_button_new_with_label("Model details");
+    gtk_button_set_relief(GTK_BUTTON(model_details_), GTK_RELIEF_NONE);
+    pack(model_controls, model_details_);
+    g_signal_connect(model_details_, "clicked", G_CALLBACK(+[](GtkButton*, gpointer d) { static_cast<App*>(d)->show_model_details(); }), this);
     download_button_ = gtk_button_new_with_label("Download model");
     gtk_widget_set_no_show_all(download_button_, TRUE);
     pack(model_controls, download_button_);
@@ -458,6 +465,7 @@ void App::build_ui() {
     g_signal_connect(model_combo_, "changed", G_CALLBACK(+[](GtkComboBox* w, gpointer d) {
         auto* self = static_cast<App*>(d); if (self->building_ui_) return;
         const char* id = gtk_combo_box_get_active_id(w); if (!id) return;
+        if (std::string(id) == "custom") { self->choose_model(); return; }
         if (self->model_ == id) return;
         self->engine_.release_model();
         self->model_ = id; self->save_config(); self->refresh();
@@ -475,8 +483,9 @@ void App::refresh() {
     gtk_widget_set_visible(status_label_, !status.empty());
     gtk_button_set_label(GTK_BUTTON(download_button_), download_ ? "Downloading…" : exists ? "Model installed" : "Download model");
     gtk_widget_set_sensitive(download_button_, !download_ && (!exists || state_ == "error") && !engine_.busy());
-    gtk_widget_set_visible(download_button_, !exists || download_ || state_ == "error");
+    gtk_widget_set_visible(download_button_, model_ != "custom" && (!exists || download_ || state_ == "error"));
     if (exists && state_ == "error" && !download_) gtk_button_set_label(GTK_BUTTON(download_button_), "Verify / repair model");
+    gtk_widget_set_sensitive(model_details_, !download_ && !engine_.busy());
     gtk_widget_set_sensitive(model_combo_, !download_ && !engine_.busy());
     gtk_widget_set_sensitive(shortcut_button_, !engine_.busy());
     gtk_widget_set_sensitive(finish_button_, !engine_.busy());
@@ -485,6 +494,75 @@ void App::refresh() {
     gtk_button_set_label(GTK_BUTTON(finish_button_), shortcut_label(finish_shortcut_).c_str());
     gtk_label_set_text(GTK_LABEL(recovery_), last_transcript_.c_str());
     gtk_widget_set_visible(recovery_, state_ == "error" && !last_transcript_.empty());
+}
+
+void App::show_model_details() {
+    auto* popover = gtk_popover_new(model_details_);
+    auto* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_container_set_border_width(GTK_CONTAINER(box), 16);
+    gtk_container_add(GTK_CONTAINER(popover), box);
+    const bool custom = model_ == "custom";
+    std::error_code error;
+    const auto bytes = std::filesystem::file_size(model_path(), error);
+    const std::string name = custom ? std::filesystem::path(custom_model_).filename().string() : "Whisper " + model_;
+    auto* title = label(name.c_str());
+    gtk_label_set_max_width_chars(GTK_LABEL(title), 32);
+    gtk_label_set_ellipsize(GTK_LABEL(title), PANGO_ELLIPSIZE_MIDDLE);
+    pack(box, title);
+    std::string size = error ? "File unavailable" : take(g_format_size_full(bytes, G_FORMAT_SIZE_IEC_UNITS));
+    if (error && !custom) {
+        for (const auto& model : kModels)
+            if (model_ == model.id) size = take(g_format_size_full(model.bytes, G_FORMAT_SIZE_IEC_UNITS)) + " download";
+    }
+    pack(box, label(size.c_str()));
+    pack(box, label("Local inference · whisper.cpp · English"));
+    if (custom) {
+        pack(box, label("User-supplied file · source not verified"));
+        pack(box, label("Compatibility checked when loaded."));
+        auto* choose = gtk_button_new_with_label("Choose another file…");
+        pack(box, choose);
+        g_signal_connect(choose, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
+            static_cast<App*>(data)->choose_model();
+        }), this);
+        g_signal_connect_swapped(choose, "clicked", G_CALLBACK(gtk_popover_popdown), popover);
+    } else {
+        pack(box, gtk_link_button_new_with_label("https://github.com/openai/whisper", "Original weights: OpenAI"));
+        const auto source = "https://huggingface.co/ggerganov/whisper.cpp/blob/98aa99a0a9db05ae2342309f5096248665f7cba3/ggml-" + model_ + ".bin";
+        pack(box, gtk_link_button_new_with_label(source.c_str(), "Quantized file: ggerganov"));
+        pack(box, label("Downloads verified with SHA-256"));
+    }
+    g_signal_connect(popover, "closed", G_CALLBACK(+[](GtkPopover* w, gpointer) { gtk_widget_destroy(GTK_WIDGET(w)); }), nullptr);
+    gtk_widget_show_all(popover);
+    gtk_popover_popup(GTK_POPOVER(popover));
+}
+
+void App::choose_model() {
+    auto* dialog = gtk_file_chooser_dialog_new("Choose a whisper.cpp GGML model", GTK_WINDOW(window_),
+        GTK_FILE_CHOOSER_ACTION_OPEN, "Cancel", GTK_RESPONSE_CANCEL, "Choose", GTK_RESPONSE_ACCEPT, nullptr);
+    auto* filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(filter, "whisper.cpp models (*.bin)");
+    gtk_file_filter_add_pattern(filter, "*.bin");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
+    gtk_file_chooser_set_local_only(GTK_FILE_CHOOSER(dialog), TRUE);
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT && !engine_.busy() && !download_) {
+        const auto path = take(gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog)));
+        std::ifstream file(path, std::ios::binary);
+        char magic[4]{};
+        file.read(magic, sizeof(magic));
+        if (file && std::string(magic, 4) == "lmgg") {
+            engine_.release_model();
+            custom_model_ = path;
+            model_ = "custom";
+            save_config();
+        } else {
+            set_state("error", "Choose a whisper.cpp GGML .bin file. This file has an invalid header.");
+        }
+    }
+    gtk_widget_destroy(dialog);
+    building_ui_ = true;
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(model_combo_), model_.c_str());
+    building_ui_ = false;
+    refresh();
 }
 
 void App::edit_shortcut(bool finish) {
@@ -521,6 +599,7 @@ void App::edit_shortcut(bool finish) {
 }
 
 void App::download_model() {
+    if (model_ == "custom") return;
     if (download_) return;
     const auto prefix = std::filesystem::path(executable_).parent_path().parent_path();
     const std::filesystem::path candidates[] = {

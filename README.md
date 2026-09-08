@@ -41,7 +41,12 @@ If a field does not support inline drafts, turn off Live text.
 [OpenAI Whisper](https://github.com/openai/whisper) weights run locally through
 [whisper.cpp](https://github.com/ggml-org/whisper.cpp). Quantized downloads come
 from [ggerganov](https://huggingface.co/ggerganov/whisper.cpp) and are checksum verified.
-Choose Base for speed or Small for accuracy.
+Choose Base for speed or Small for accuracy. **Model details** shows the file size and source.
+Choose **Custom file…** to use a local whisper.cpp GGML model; compatibility is checked
+when loaded. Custom files stay in their original location.
+
+The cloud listens, the ring processes, and purple expansion recognizes a command.
+A brief particle checkmark means inserted; overlapping sheets mean copied.
 
 ## Project
 

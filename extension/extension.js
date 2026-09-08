@@ -157,6 +157,7 @@ export default class LiltExtension extends Extension {
 
     disable() {
         this._enabled = false;
+        this._feedback = '';
         this._enableGeneration++;
         this._generation++;
         this._cancellable.cancel();
@@ -245,7 +246,7 @@ export default class LiltExtension extends Extension {
             const [width, height] = this._wave.get_surface_size();
             drawOrb(context, width, height, this._orbBands ?? [0, 0, 0],
                 (GLib.get_monotonic_time() - (this._orbStarted ?? 0)) / 1000000,
-                this._orbCommandMix ?? 0, this._orbLoadingMix ?? 0);
+                this._orbCommandMix ?? 0, this._orbLoadingMix ?? 0, this._feedback ?? '');
             context.$dispose();
         });
         content.add_child(this._wave);
@@ -356,6 +357,8 @@ export default class LiltExtension extends Extension {
     async _beginSession(nativeState = null) {
         if (this._inserting || this._session)
             return false;
+        this._feedback = '';
+        this._stopWave();
         this._clearTarget();
         this._target = global.display.focus_window;
         this._targetSignal = this._target?.connect('unmanaged', () => {
@@ -534,13 +537,15 @@ export default class LiltExtension extends Extension {
 
     _drawState() {
         const recording = this._state === 'recording';
-        const active = ACTIVE.has(this._state) || (this._commandAnimating && !this._cancelled);
+        const active = ACTIVE.has(this._state) || (this._commandAnimating && !this._cancelled) || Boolean(this._feedback);
         this._recordItem.label.text = recording ? 'Finish dictation' : 'Start dictation';
         this._recordItem.setSensitive(!active || recording);
         this._panelIcon[recording ? 'add_style_class_name' : 'remove_style_class_name']('lilt-panel-recording');
         this._pill.accessible_name = recording ? 'Recording. Click to finish dictation.' :
             this._state === 'loading' ? 'Starting dictation. Escape to cancel.' :
                 'Transcribing. Escape to cancel.';
+        if (this._feedback)
+            this._pill.accessible_name = this._feedback === 'copied' ? 'Transcript copied to clipboard.' : 'Transcript inserted.';
         this._wave.visible = active;
         if (active) {
             this._startOrb();
@@ -704,11 +709,13 @@ export default class LiltExtension extends Extension {
             this._stopWave();
             this._pill.hide();
             if (this._sessionLive) {
+                let inserted = false;
                 try {
                     if (!openBrowser && text && this._target && global.display.focus_window === this._target &&
                         !Main.overview.visible && Main.modalCount === 0) {
                         if (!await this._composition.commit(text))
                             throw new Error('The transcript could not be inserted.');
+                        inserted = true;
                     } else {
                         await this._composition?.cancel();
                     }
@@ -722,6 +729,8 @@ export default class LiltExtension extends Extension {
                         this._session = false;
                         this._clearTarget();
                         this._bindShortcut();
+                        if (inserted)
+                            this._showFeedback('inserted');
                         if (openBrowser && !this._cancelled)
                             this._openBrowser();
                     }
@@ -743,6 +752,7 @@ export default class LiltExtension extends Extension {
                 St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
                 Main.notify('lilt', 'Transcript copied to clipboard.');
                 this._clearTarget();
+                this._showFeedback('copied');
                 return;
             }
             if (!this._target) {
@@ -751,6 +761,18 @@ export default class LiltExtension extends Extension {
             }
             Main.activateWindow(this._target);
             this._later(120, () => this._insert(text, 0, generation));
+        });
+    }
+
+    _showFeedback(kind) {
+        this._feedback = kind;
+        this._drawState();
+        const generation = this._generation;
+        this._later(900, () => {
+            if (generation !== this._generation || this._session)
+                return;
+            this._feedback = '';
+            this._drawState();
         });
     }
 

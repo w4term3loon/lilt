@@ -20,10 +20,11 @@ private:
     guint registration_ = 0, owner_watch_ = 0;
     GtkWidget *window_ = nullptr, *status_label_ = nullptr, *model_combo_ = nullptr,
         *shortcut_button_ = nullptr, *finish_button_ = nullptr, *preview_switch_ = nullptr, *download_button_ = nullptr,
-        *recovery_ = nullptr;
+        *recovery_ = nullptr, *model_details_ = nullptr;
     GSubprocess* download_ = nullptr;
     std::shared_ptr<std::atomic_bool> alive_;
     std::string model_ = "small.en-q5_1", shortcut_ = "<Control><Super>space";
+    std::string custom_model_;
     std::string finish_shortcut_ = "Return";
     std::string state_ = "idle", message_ = "Ready", shell_owner_, last_transcript_;
     double level_ = 0;
@@ -46,6 +47,8 @@ private:
     void save_config();
     void edit_shortcut(bool finish = false);
     void download_model();
+    void show_model_details();
+    void choose_model();
     std::string model_path() const;
     void dispatch(std::function<void()>);
     static void method_call(GDBusConnection*, const gchar*, const gchar*, const gchar*,
