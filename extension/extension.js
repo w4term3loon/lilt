@@ -241,10 +241,10 @@ export default class RenExtension extends Extension {
         });
         const content = new St.Widget({
             layout_manager: new Clutter.BinLayout(),
-            width: 160, height: 160,
+            width: 208, height: 208,
         });
         this._wave = new St.DrawingArea({
-            width: 160, height: 160,
+            width: 208, height: 208,
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
         });
