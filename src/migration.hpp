@@ -9,7 +9,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace lilt::detail {
+namespace ren::detail {
 namespace fs = std::filesystem;
 
 inline bool path_present(const fs::path& path) {
@@ -42,7 +42,7 @@ inline void import_file(const fs::path& source, const fs::path& target, bool lin
         if (!error || error == std::errc::file_exists) return;
         // A separate filesystem, or restricted hardlinks, needs a private copy.
     }
-    auto pattern = (target.parent_path() / ".lilt-migrate-XXXXXX").string();
+    auto pattern = (target.parent_path() / ".ren-migrate-XXXXXX").string();
     std::vector<char> filename(pattern.begin(), pattern.end());
     filename.push_back('\0');
     const int fd = mkstemp(filename.data());
@@ -65,30 +65,35 @@ inline void import_file(const fs::path& source, const fs::path& target, bool lin
 }
 
 // Import only user settings and complete model files, never old executable code.
-// Existing lilt files win; legacy files are never changed or removed. A marker
+// Existing Ren files win; legacy files are never changed or removed. A marker
 // prevents models deliberately removed after migration from returning on launch.
 inline std::string migrate_legacy_state(const fs::path& config_home, const fs::path& data_home) {
     try {
-        const auto marker = data_home / "lilt/.legacy-migration-complete";
+        const auto marker = data_home / "ren/.legacy-migration-complete";
         if (path_present(marker)) return {};
-        const auto old_config = config_home / "ptt/config.ini";
-        const auto old_models = data_home / "ptt/models";
-        const bool has_config = path_present(old_config) && fs::is_regular_file(fs::symlink_status(old_config));
-        const bool has_models = path_present(old_models) && fs::is_directory(fs::symlink_status(old_models));
-        if (!has_config && !has_models) return {};
-
-        if (has_config) import_file(old_config, config_home / "lilt/config.ini", false);
-        if (has_models) {
-            for (const auto& entry : fs::directory_iterator(old_models)) {
-                const auto name = entry.path().filename().string();
-                if (!fs::is_regular_file(entry.symlink_status()) || name.rfind("ggml-", 0) != 0 ||
-                    entry.path().extension() != ".bin") continue;
-                import_file(entry.path(), data_home / "lilt/models" / name, true);
+        bool found = false;
+        for (const auto* legacy : {"lilt", "ptt"}) {
+            // Lilt already imported PTT; do not restore models later removed there.
+            if (std::string(legacy) == "ptt" && path_present(data_home / "lilt/.legacy-migration-complete")) continue;
+            const auto old_config = config_home / legacy / "config.ini";
+            const auto old_models = data_home / legacy / "models";
+            const bool has_config = path_present(old_config) && fs::is_regular_file(fs::symlink_status(old_config));
+            const bool has_models = path_present(old_models) && fs::is_directory(fs::symlink_status(old_models));
+            found |= has_config || has_models;
+            if (has_config) import_file(old_config, config_home / "ren/config.ini", false);
+            if (has_models) {
+                for (const auto& entry : fs::directory_iterator(old_models)) {
+                    const auto name = entry.path().filename().string();
+                    if (!fs::is_regular_file(entry.symlink_status()) || name.rfind("ggml-", 0) != 0 ||
+                        entry.path().extension() != ".bin") continue;
+                    import_file(entry.path(), data_home / "ren/models" / name, true);
+                }
             }
         }
+        if (!found) return {};
         private_directory(marker.parent_path());
         // An empty marker is sufficient; never truncate an existing user file.
-        auto pattern = (marker.parent_path() / ".lilt-migrate-XXXXXX").string();
+        auto pattern = (marker.parent_path() / ".ren-migrate-XXXXXX").string();
         std::vector<char> filename(pattern.begin(), pattern.end());
         filename.push_back('\0');
         const int fd = mkstemp(filename.data());
@@ -107,4 +112,4 @@ inline std::string migrate_legacy_state(const fs::path& config_home, const fs::p
         return error.what();
     }
 }
-} // namespace lilt::detail
+} // namespace ren::detail

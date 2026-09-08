@@ -24,7 +24,7 @@
 #include <thread>
 #include <utility>
 
-namespace lilt {
+namespace ren {
 namespace {
 
 using Clock = std::chrono::steady_clock;
@@ -342,7 +342,7 @@ std::vector<float> capture_audio(std::atomic<bool>& stop, std::atomic<bool>& can
     PulseCapture pulse;
     pulse.loop = pa_mainloop_new();
     if (!pulse.loop) throw std::runtime_error("Cannot create the audio connection.");
-    pulse.context = pa_context_new(pa_mainloop_get_api(pulse.loop), "lilt");
+    pulse.context = pa_context_new(pa_mainloop_get_api(pulse.loop), "ren");
     if (!pulse.context || pa_context_connect(pulse.context, nullptr, PA_CONTEXT_NOAUTOSPAWN, nullptr) < 0)
         throw pulse.error("Cannot connect to Ubuntu's audio server");
 
@@ -663,4 +663,4 @@ std::string Engine::transcribe_file(const std::string& model_path, const std::st
     return impl_->replay(model_path, threads, [&wav_path] { return read_wav(wav_path); });
 }
 
-} // namespace lilt
+} // namespace ren

@@ -9,7 +9,7 @@
 #include <unistd.h>
 #include <csignal>
 
-namespace lilt {
+namespace ren {
 // GApplication must export the dictation interface before acquiring its bus
 // name: the first activated call can arrive before the startup signal.
 struct NativeApplication {
@@ -41,13 +41,13 @@ void NativeApplication::unregister_bus(GApplication* application, GDBusConnectio
 }
 
 namespace {
-constexpr auto kPath = "/io/github/lilt/Dictation";
-constexpr auto kInterface = "io.github.lilt.Dictation";
+constexpr auto kPath = "/io/github/ren/Dictation";
+constexpr auto kInterface = "io.github.ren.Dictation";
 constexpr struct { const char* id; const char* title; guint64 bytes; } kModels[] = {
     {"tiny.en-q5_1", "Tiny", 32166155}, {"base.en-q5_1", "Base", 59721011},
     {"small.en-q5_1", "Small", 190098681}, {"medium.en-q5_0", "Medium", 539225533},
 };
-constexpr auto kXml = R"(<node><interface name="io.github.lilt.Dictation">
+constexpr auto kXml = R"(<node><interface name="io.github.ren.Dictation">
 <method name="Toggle"/><method name="Stop"/><method name="Cancel"/>
 <method name="ShowPreferences"/><method name="Quit"/><method name="Attach"/><method name="Detach"/>
 <method name="ReportError"><arg type="s" direction="in" name="message"/></method>
@@ -102,11 +102,11 @@ void pack(GtkWidget* box, GtkWidget* child, int padding = 0) {
 }
 
 App::App() : alive_(std::make_shared<std::atomic_bool>(true)) {
-    config_path_ = std::string(g_get_user_config_dir()) + "/lilt/config.ini";
-    data_path_ = std::string(g_get_user_data_dir()) + "/lilt";
+    config_path_ = std::string(g_get_user_config_dir()) + "/ren/config.ini";
+    data_path_ = std::string(g_get_user_data_dir()) + "/ren";
     const auto migration_error = detail::migrate_legacy_state(g_get_user_config_dir(), g_get_user_data_dir());
     if (!migration_error.empty()) {
-        g_printerr("lilt: Legacy settings/model migration could not finish: %s\n", migration_error.c_str());
+        g_printerr("ren: Legacy settings/model migration could not finish: %s\n", migration_error.c_str());
         set_state("error", "Could not import previous settings or models: " + migration_error);
     }
     char buffer[4096];
@@ -133,7 +133,7 @@ int App::run(int argc, char** argv) {
         {"toggle", 0, 0, G_OPTION_ARG_NONE, nullptr, "Start or finish dictation", nullptr},
         {"stop", 0, 0, G_OPTION_ARG_NONE, nullptr, "Finish recording", nullptr},
         {"cancel", 0, 0, G_OPTION_ARG_NONE, nullptr, "Discard recording", nullptr},
-        {"quit", 0, 0, G_OPTION_ARG_NONE, nullptr, "Quit lilt", nullptr},
+        {"quit", 0, 0, G_OPTION_ARG_NONE, nullptr, "Quit ren", nullptr},
         {nullptr, 0, 0, G_OPTION_ARG_NONE, nullptr, nullptr, nullptr}
     };
     g_application_add_main_option_entries(G_APPLICATION(app_), entries);
@@ -207,7 +207,7 @@ void App::toggle() {
     if (state_ == "recording") { engine_.stop(); return; }
     if (engine_.busy() || download_) { publish(); return; }
     if (shell_owner_.empty()) {
-        set_state("error", "Enable the lilt GNOME extension, then log out and back in if needed.");
+        set_state("error", "Enable the ren GNOME extension, then log out and back in if needed.");
         show(); return;
     }
     if (!g_file_test(model_path().c_str(), G_FILE_TEST_IS_REGULAR)) {
@@ -302,7 +302,7 @@ void App::method_call(GDBusConnection*, const gchar* sender, const gchar*, const
         if (owner) g_variant_get(owner, "(&s)", &name);
         bool valid = g_str_equal(sender, name);
         if (owner) g_variant_unref(owner);
-        if (!valid) { g_dbus_method_invocation_return_dbus_error(invocation, "io.github.lilt.Error", "Only GNOME Shell can attach."); return; }
+        if (!valid) { g_dbus_method_invocation_return_dbus_error(invocation, "io.github.ren.Error", "Only GNOME Shell can attach."); return; }
         self->shell_owner_ = sender; self->refresh();
     } else if (g_str_equal(method, "Detach")) {
         if (self->shell_owner_ == sender) { self->shell_owner_.clear(); self->cancel_session(); self->refresh(); }
@@ -326,11 +326,13 @@ void App::load_config() {
     bool migrate = false;
     if (loaded) {
         // Preserve settings from the old project name and the interim branding.
-        const char* group = g_key_file_has_group(file, "lilt") ? "lilt" :
-            g_key_file_has_group(file, "LILT") ? "LILT" : "PTT";
+        const char* group = "ren";
+        for (const char* candidate : {"ren", "lilt", "LILT", "PTT"}) {
+            if (g_key_file_has_group(file, candidate)) { group = candidate; break; }
+        }
         auto read = [&](const char* key, std::string& out) { auto v = take(g_key_file_get_string(file, group, key, nullptr)); if (!v.empty()) out = v; };
         read("custom_model", custom_model_); read("model", model_); read("shortcut", shortcut_);
-        migrate = std::string(group) != "lilt" || take(g_key_file_get_string(file, group, "language", nullptr)) != "en";
+        migrate = std::string(group) != "ren" || take(g_key_file_get_string(file, group, "language", nullptr)) != "en";
         read("finish_shortcut", finish_shortcut_);
         if (g_key_file_has_key(file, group, "live_preview", nullptr)) {
             GError* error = nullptr;
@@ -349,14 +351,14 @@ void App::load_config() {
     if (loaded && (migrate || model_ != previous_model)) save_config();
 }
 void App::save_config() {
-    g_mkdir_with_parents((std::string(g_get_user_config_dir()) + "/lilt").c_str(), 0700);
+    g_mkdir_with_parents((std::string(g_get_user_config_dir()) + "/ren").c_str(), 0700);
     GKeyFile* file = g_key_file_new();
-    g_key_file_set_string(file, "lilt", "model", model_.c_str());
-    g_key_file_set_string(file, "lilt", "custom_model", custom_model_.c_str());
-    g_key_file_set_string(file, "lilt", "language", "en");
-    g_key_file_set_string(file, "lilt", "shortcut", shortcut_.c_str());
-    g_key_file_set_string(file, "lilt", "finish_shortcut", finish_shortcut_.c_str());
-    g_key_file_set_boolean(file, "lilt", "live_preview", live_preview_);
+    g_key_file_set_string(file, "ren", "model", model_.c_str());
+    g_key_file_set_string(file, "ren", "custom_model", custom_model_.c_str());
+    g_key_file_set_string(file, "ren", "language", "en");
+    g_key_file_set_string(file, "ren", "shortcut", shortcut_.c_str());
+    g_key_file_set_string(file, "ren", "finish_shortcut", finish_shortcut_.c_str());
+    g_key_file_set_boolean(file, "ren", "live_preview", live_preview_);
     GError* error = nullptr;
     if (!g_key_file_save_to_file(file, config_path_.c_str(), &error)) {
         set_state("error", error->message); g_clear_error(&error);
@@ -374,45 +376,45 @@ void App::show() {
 void App::build_ui() {
     building_ui_ = true;
     window_ = gtk_application_window_new(app_);
-    gtk_window_set_title(GTK_WINDOW(window_), "lilt");
+    gtk_window_set_title(GTK_WINDOW(window_), "Ren");
     gtk_window_set_default_size(GTK_WINDOW(window_), 360, 1);
     gtk_window_set_resizable(GTK_WINDOW(window_), FALSE);
     gtk_window_set_icon_name(GTK_WINDOW(window_), kInterface);
-    gtk_style_context_add_class(gtk_widget_get_style_context(window_), "lilt-preferences");
+    gtk_style_context_add_class(gtk_widget_get_style_context(window_), "ren-preferences");
     auto* header = gtk_header_bar_new();
-    gtk_header_bar_set_title(GTK_HEADER_BAR(header), "lilt");
+    gtk_header_bar_set_title(GTK_HEADER_BAR(header), "Ren");
     gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(header), TRUE);
     gtk_window_set_titlebar(GTK_WINDOW(window_), header);
     g_signal_connect(window_, "delete-event", G_CALLBACK(+[](GtkWidget* w, GdkEvent*, gpointer) -> gboolean { gtk_widget_hide(w); return TRUE; }), this);
     auto* css = gtk_css_provider_new();
     gtk_css_provider_load_from_data(css, R"(
-        .lilt-preferences .lilt-card {
+        .ren-preferences .ren-card {
             background-color: @theme_base_color;
             border: 1px solid alpha(@theme_fg_color, 0.10);
             border-radius: 12px;
             padding: 16px;
         }
-        .lilt-preferences .lilt-field { font-weight: 500; }
-        .lilt-preferences .lilt-status { font-size: 12px; }
+        .ren-preferences .ren-field { font-weight: 500; }
+        .ren-preferences .ren-status { font-size: 12px; }
     )", -1, nullptr);
     gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(css);
     auto* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
     gtk_container_set_border_width(GTK_CONTAINER(box), 20);
     gtk_container_add(GTK_CONTAINER(window_), box);
-    status_label_ = label("", "lilt-status");
+    status_label_ = label("", "ren-status");
     gtk_widget_set_no_show_all(status_label_, TRUE);
     gtk_widget_set_size_request(status_label_, 308, -1);
     gtk_widget_set_halign(status_label_, GTK_ALIGN_CENTER);
     gtk_label_set_xalign(GTK_LABEL(status_label_), 0.5);
     gtk_label_set_justify(GTK_LABEL(status_label_), GTK_JUSTIFY_CENTER);
     auto* grid = gtk_grid_new();
-    gtk_style_context_add_class(gtk_widget_get_style_context(grid), "lilt-card");
+    gtk_style_context_add_class(gtk_widget_get_style_context(grid), "ren-card");
     gtk_widget_set_halign(grid, GTK_ALIGN_CENTER);
     gtk_grid_set_row_spacing(GTK_GRID(grid), 12);
     gtk_grid_set_column_spacing(GTK_GRID(grid), 18);
     auto row = [&](const char* title, GtkWidget* control, int position) {
-        auto* field = label(title, "lilt-field");
+        auto* field = label(title, "ren-field");
         gtk_widget_set_size_request(field, 72, 36);
         gtk_widget_set_valign(field, GTK_ALIGN_CENTER);
         gtk_widget_set_size_request(control, 168, -1);
@@ -478,7 +480,7 @@ void App::refresh() {
     const bool exists = g_file_test(model_path().c_str(), G_FILE_TEST_IS_REGULAR);
     std::string status;
     if (!download_ && state_ == "error") status = message_;
-    else if (shell_owner_.empty()) status = "Enable lilt in Extensions, then log out and back in.";
+    else if (shell_owner_.empty()) status = "Enable ren in Extensions, then log out and back in.";
     gtk_label_set_text(GTK_LABEL(status_label_), status.c_str());
     gtk_widget_set_visible(status_label_, !status.empty());
     gtk_button_set_label(GTK_BUTTON(download_button_), download_ ? "Downloading…" : exists ? "Model installed" : "Download model");
@@ -572,7 +574,7 @@ void App::edit_shortcut(bool finish) {
     gtk_container_set_border_width(GTK_CONTAINER(box), 24);
     auto* prompt = label(finish ? "Press a key or a combination.\nEsc cancels." : "Press a combination with Ctrl, Alt, or Super.\nEsc cancels.");
     pack(box, prompt);
-    g_object_set_data(G_OBJECT(dialog), "lilt-finish-shortcut", GINT_TO_POINTER(finish));
+    g_object_set_data(G_OBJECT(dialog), "ren-finish-shortcut", GINT_TO_POINTER(finish));
     g_signal_connect(dialog, "key-press-event", G_CALLBACK(+[](GtkWidget* w, GdkEventKey* event, gpointer d) -> gboolean {
         if (event->keyval == GDK_KEY_Escape) { gtk_dialog_response(GTK_DIALOG(w), GTK_RESPONSE_CANCEL); return TRUE; }
         if (event->is_modifier) return TRUE;
@@ -586,7 +588,7 @@ void App::edit_shortcut(bool finish) {
             key = GDK_KEY_Tab;
             mods = static_cast<GdkModifierType>(mods | GDK_SHIFT_MASK);
         }
-        const bool finish = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "lilt-finish-shortcut"));
+        const bool finish = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "ren-finish-shortcut"));
         if (!valid_shortcut(key, mods, finish)) return TRUE;
         auto* self = static_cast<App*>(d);
         auto& shortcut = finish ? self->finish_shortcut_ : self->shortcut_;
@@ -603,7 +605,7 @@ void App::download_model() {
     if (download_) return;
     const auto prefix = std::filesystem::path(executable_).parent_path().parent_path();
     const std::filesystem::path candidates[] = {
-        prefix / "share/lilt/download-model.py", prefix / "scripts/download-model.py",
+        prefix / "share/ren/download-model.py", prefix / "scripts/download-model.py",
     };
     std::string script;
     if (!executable_.empty()) {
@@ -613,7 +615,7 @@ void App::download_model() {
         }
     }
     if (script.empty()) {
-        set_state("error", "The model downloader is missing. Reinstall lilt to restore it.");
+        set_state("error", "The model downloader is missing. Reinstall ren to restore it.");
         return;
     }
     GError* error = nullptr;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Remove lilt; keep settings and models unless --purge-data is given."""
+"""Remove ren; keep settings and models unless --purge-data is given."""
 
 import argparse
 import os
@@ -25,23 +25,23 @@ if __name__ == '__main__':
     try:
         if not data.is_absolute() or not config.is_absolute():
             raise ValueError('XDG directories must be absolute paths.')
-        for command in (['gnome-extensions', 'disable', 'lilt@local'], [str(prefix / 'bin/lilt'), '--quit']):
+        for command in (['gnome-extensions', 'disable', 'ren@local'], [str(prefix / 'bin/ren'), '--quit']):
             try:
                 subprocess.run(command, capture_output=True, timeout=5)
             except (OSError, subprocess.TimeoutExpired):
                 pass
-        for path in (prefix / 'bin/lilt', data / 'gnome-shell/extensions/lilt@local',
-                     data / 'applications/io.github.lilt.Dictation.desktop',
-                     data / 'dbus-1/services/io.github.lilt.Dictation.service',
-                     data / 'icons/hicolor/scalable/apps/io.github.lilt.Dictation.svg'):
+        for path in (prefix / 'bin/ren', data / 'gnome-shell/extensions/ren@local',
+                     data / 'applications/io.github.ren.Dictation.desktop',
+                     data / 'dbus-1/services/io.github.ren.Dictation.service',
+                     data / 'icons/hicolor/scalable/apps/io.github.ren.Dictation.svg'):
             remove(path)
         if args.purge_data:
-            remove(prefix / 'share/lilt')
-            remove(data / 'lilt')
-            remove(config / 'lilt')
+            remove(prefix / 'share/ren')
+            remove(data / 'ren')
+            remove(config / 'ren')
         else:
             for name in ('download-model.py', 'uninstall.py', 'LICENSE', 'LICENSES', 'THIRD_PARTY_NOTICES.md', '__pycache__'):
-                remove(prefix / 'share/lilt' / name)
-        print('Removed lilt.' + (' Settings and models deleted.' if args.purge_data else ' Settings and models kept.'))
+                remove(prefix / 'share/ren' / name)
+        print('Removed ren.' + (' Settings and models deleted.' if args.purge_data else ' Settings and models kept.'))
     except (OSError, ValueError) as error:
         parser.exit(1, f'Removal failed: {error}\n')

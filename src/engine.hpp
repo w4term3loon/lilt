@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace lilt {
+namespace ren {
 
 // State, level, and final-result callbacks run on the capture worker; partial
 // callbacks run on a separate decoder worker and may run concurrently with
@@ -63,4 +63,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace lilt
+} // namespace ren

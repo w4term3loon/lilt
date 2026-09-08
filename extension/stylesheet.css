@@ -1,18 +1,18 @@
-.lilt-pill {
+.ren-pill {
     background-color: transparent;
     border: none;
     padding: 0;
     box-shadow: none;
 }
 /* Keep cached GNOME modules visible until the next login. */
-.lilt-wave { spacing: 2px; height: 23px; }
-.lilt-wave-bar { width: 3px; color: #e95420; }
-.lilt-dots { spacing: 5px; height: 23px; }
-.lilt-dot {
+.ren-wave { spacing: 2px; height: 23px; }
+.ren-wave-bar { width: 3px; color: #e95420; }
+.ren-dots { spacing: 5px; height: 23px; }
+.ren-dot {
     width: 5px;
     height: 5px;
     border-radius: 3px;
     background-color: #e95420;
     border: 1px solid rgba(110, 48, 14, 0.25);
 }
-.lilt-panel-recording { color: #ff726a; }
+.ren-panel-recording { color: #ff726a; }

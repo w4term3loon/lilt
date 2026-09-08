@@ -16,8 +16,8 @@ import {insertionText, isBrowserCommand, isBrowserCommandPreview, startsBrowserC
 import {Composition} from './composition.js';
 import {drawOrb, voiceIntensity} from './orb.js';
 
-const BUS_NAME = 'io.github.lilt.Dictation';
-const BUS_PATH = '/io/github/lilt/Dictation';
+const BUS_NAME = 'io.github.ren.Dictation';
+const BUS_PATH = '/io/github/ren/Dictation';
 const BUS_XML = `<node><interface name="${BUS_NAME}">
     <method name="Attach"/><method name="Detach"/>
     <method name="Toggle"/><method name="Stop"/><method name="Cancel"/>
@@ -103,7 +103,7 @@ function matchesShortcut(binding, event) {
         shortcutModifiers(event.get_state()) === binding.modifiers;
 }
 
-export default class LiltExtension extends Extension {
+export default class RenExtension extends Extension {
     enable() {
         this._enabled = true;
         const enableGeneration = this._enableGeneration = (this._enableGeneration ?? 0) + 1;
@@ -139,7 +139,7 @@ export default class LiltExtension extends Extension {
                 if (!this._enabled || enableGeneration !== this._enableGeneration)
                     return;
                 if (error) {
-                    this._error(`Could not connect to lilt: ${error.message}`);
+                    this._error(`Could not connect to ren: ${error.message}`);
                     return;
                 }
                 this._proxyReady = true;
@@ -213,7 +213,7 @@ export default class LiltExtension extends Extension {
     }
 
     _makeUi() {
-        this._indicator = new PanelMenu.Button(0.0, 'lilt');
+        this._indicator = new PanelMenu.Button(0.0, 'Ren');
         this._panelIcon = new St.Icon({
             gicon: Gio.icon_new_for_string(`${this.path}/wren-symbolic.svg`),
             style_class: 'system-status-icon',
@@ -226,7 +226,7 @@ export default class LiltExtension extends Extension {
         Main.panel.addToStatusArea(this.uuid, this._indicator);
 
         this._pill = new St.Button({
-            style_class: 'lilt-pill',
+            style_class: 'ren-pill',
             reactive: true,
             can_focus: false,
             visible: false,
@@ -271,7 +271,7 @@ export default class LiltExtension extends Extension {
             Shell.ActionMode.NORMAL,
             () => this._toggle());
         if (action === Meta.KeyBindingAction.NONE)
-            this._error('lilt could not register this shortcut. Choose another in Preferences.');
+            this._error('ren could not register this shortcut. Choose another in Preferences.');
     }
 
     _ownerChanged() {
@@ -297,7 +297,7 @@ export default class LiltExtension extends Extension {
         if (!this._enabled)
             return;
         if (!this._proxyReady) {
-            this._error('lilt is starting. Try the shortcut again in a moment.');
+            this._error('ren is starting. Try the shortcut again in a moment.');
             return;
         }
         const enableGeneration = this._enableGeneration;
@@ -540,7 +540,7 @@ export default class LiltExtension extends Extension {
         const active = ACTIVE.has(this._state) || (this._commandAnimating && !this._cancelled) || Boolean(this._feedback);
         this._recordItem.label.text = recording ? 'Finish dictation' : 'Start dictation';
         this._recordItem.setSensitive(!active || recording);
-        this._panelIcon[recording ? 'add_style_class_name' : 'remove_style_class_name']('lilt-panel-recording');
+        this._panelIcon[recording ? 'add_style_class_name' : 'remove_style_class_name']('ren-panel-recording');
         this._pill.accessible_name = recording ? 'Recording. Click to finish dictation.' :
             this._state === 'loading' ? 'Starting dictation. Escape to cancel.' :
                 'Transcribing. Escape to cancel.';
@@ -751,7 +751,7 @@ export default class LiltExtension extends Extension {
             }
             if (this._clipboardOnly) {
                 St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
-                Main.notify('lilt', 'Transcript copied to clipboard.');
+                Main.notify('Ren', 'Transcript copied to clipboard.');
                 this._clearTarget();
                 this._showFeedback('copied');
                 return;
@@ -896,7 +896,7 @@ export default class LiltExtension extends Extension {
     }
 
     _error(message) {
-        Main.notifyError('lilt', message);
+        Main.notifyError('Ren', message);
     }
 
     _later(delay, callback) {

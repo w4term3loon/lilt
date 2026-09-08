@@ -1,6 +1,6 @@
 # Roadmap
 
-Keep lilt small, reliable, and local.
+Keep ren small, reliable, and local.
 
 - [ ] Improve startup and recovery when desktop services are unavailable.
 - [ ] Check live typing and Finish latency in everyday applications.

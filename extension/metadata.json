@@ -1,10 +1,10 @@
 {
-  "uuid": "lilt@local",
-  "name": "lilt",
+  "uuid": "ren@local",
+  "name": "Ren",
   "description": "Local voice dictation: a shortcut, a small recording indicator, and direct text insertion.",
-  "url": "https://github.com/w4term3loon/lilt",
+  "url": "https://github.com/w4term3loon/ren",
   "shell-version": ["46"],
-  "settings-schema": "org.gnome.shell.extensions.lilt",
-  "version": 24,
+  "settings-schema": "org.gnome.shell.extensions.ren",
+  "version": 25,
   "version-name": "0.6.0"
 }

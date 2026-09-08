@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstddef>
 
-namespace lilt {
+namespace ren {
 // Overlapping low/mid/high bands for the indicator, at the capture rate of 16 kHz.
 // Four one-pole filters avoid an FFT and never alter the recorded samples.
 class AudioBands {

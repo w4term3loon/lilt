@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-namespace lilt {
+namespace ren {
 namespace {
 
 bool separator(std::uint32_t c) {
@@ -67,4 +67,4 @@ std::string normalize_dictation(std::string_view text) {
     return result;
 }
 
-} // namespace lilt
+} // namespace ren

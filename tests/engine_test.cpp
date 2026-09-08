@@ -2,6 +2,7 @@
 #include "text.hpp"
 #include "streaming_text.hpp"
 #include "audio_bands.hpp"
+#include "migration.hpp"
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -46,7 +47,7 @@ void wait_until(Predicate ready, std::chrono::milliseconds timeout, const std::s
 struct TemporaryDirectory {
     std::filesystem::path path;
     TemporaryDirectory() {
-        char pattern[] = "/tmp/lilt-engine-test-XXXXXX";
+        char pattern[] = "/tmp/ren-engine-test-XXXXXX";
         const char* made = mkdtemp(pattern);
         if (!made) throw std::runtime_error("Cannot create test directory");
         path = made;
@@ -103,7 +104,7 @@ void write(const std::filesystem::path& path, const std::vector<unsigned char>& 
 }
 
 void text_tests() {
-    using lilt::normalize_dictation;
+    using ren::normalize_dictation;
     expect(normalize_dictation("  hello\r\n\tworld  ") == "hello world", "Return/Tab normalization");
     expect(normalize_dictation(std::string("left\0right", 10)) == "left right", "Embedded NUL normalization");
     expect(normalize_dictation(u8"árvíztűrő tükörfúrógép 日本語 👋") == u8"árvíztűrő tükörfúrógép 日本語 👋",
@@ -123,7 +124,7 @@ void text_tests() {
 }
 
 void preview_tests() {
-    using lilt::detail::stable_word_prefix;
+    using ren::detail::stable_word_prefix;
     expect(stable_word_prefix("", "hello world") == 0, "First hypothesis is entirely tentative");
     expect(stable_word_prefix("hello world", "hello world") == 6, "Final word stays tentative");
     expect(stable_word_prefix("I like cats", "I like dogs") == 7, "Changed word is excluded from stable prefix");
@@ -135,7 +136,7 @@ void preview_tests() {
     expect(stable_word_prefix(u8"日本語 text", u8"日本語 test") == std::string(u8"日本語 ").size(),
            "A complete multibyte prefix retains a valid byte offset");
 
-    lilt::detail::LatestValue<int> pending;
+    ren::detail::LatestValue<int> pending;
     pending.publish(1);
     expect(pending.take() == 1, "Worker consumes first snapshot");
     pending.publish(2);
@@ -147,7 +148,7 @@ void preview_tests() {
     pending.publish(5);
     expect(!pending.take(), "A closed preview queue cannot restart");
 
-    lilt::detail::LatestValue<int> waiting;
+    ren::detail::LatestValue<int> waiting;
     auto consumer = std::async(std::launch::async, [&] {
         return waiting.take(std::chrono::steady_clock::now() + 60s);
     });
@@ -158,7 +159,7 @@ void preview_tests() {
 }
 
 void audio_tests(const std::filesystem::path& directory) {
-    lilt::Engine engine;
+    ren::Engine engine;
     const auto missing = (directory / "missing.bin").string();
     expect(engine.transcribe(missing, {}).empty(), "Empty audio skips the model");
     expect(engine.transcribe(missing, std::vector<float>(32000, 0)).empty(), "Silence skips the model");
@@ -235,7 +236,7 @@ void lifecycle_tests(const std::filesystem::path& directory) {
     const auto model = (directory / "placeholder-model.bin").string();
     std::ofstream(model).put(0); // Capture setup checks readability, not model contents.
     std::atomic<int> results{0}, terminal{0}, errors{0};
-    lilt::Engine::Callbacks callbacks;
+    ren::Engine::Callbacks callbacks;
     callbacks.on_state = [&](std::string state, std::string) {
         if (state == "idle") ++terminal;
         if (state == "error") ++errors;
@@ -243,7 +244,7 @@ void lifecycle_tests(const std::filesystem::path& directory) {
     callbacks.on_result = [&](std::string) { ++results; };
     const auto started = std::chrono::steady_clock::now();
     {
-        lilt::Engine engine;
+        ren::Engine engine;
         for (int i = 0; i < 2; ++i) {
             expect(engine.start(model, 1, callbacks), "New session starts after cancel");
             std::this_thread::sleep_for(50ms);
@@ -259,11 +260,50 @@ void lifecycle_tests(const std::filesystem::path& directory) {
     expect(terminal == 2 && errors == 0 && results == 0, "Cancelled sessions must never produce text");
     expect(std::chrono::steady_clock::now() - started < 2s, "Repeated capture cancellation is bounded");
     {
-        lilt::Engine engine;
+        ren::Engine engine;
         expect(engine.start(model, 1, callbacks), "Destructor test starts");
         std::this_thread::sleep_for(50ms);
     } // Destruction cancels and joins a stalled capture.
     expect(std::chrono::steady_clock::now() - started < 3s, "Destruction must release the worker promptly");
+}
+
+void migration_tests(const std::filesystem::path& directory) {
+    namespace fs = std::filesystem;
+    const auto config = directory / "config", data = directory / "data";
+    auto put = [](const fs::path& path, const char* value) {
+        fs::create_directories(path.parent_path());
+        std::ofstream(path) << value;
+    };
+    auto read = [](const fs::path& path) {
+        std::ifstream stream(path);
+        return std::string(std::istreambuf_iterator<char>(stream), {});
+    };
+    put(config / "lilt/config.ini", "[lilt]\nmodel=custom\ncustom_model=/models/personal.bin\n");
+    put(config / "ptt/config.ini", "[PTT]\nmodel=tiny-q5_1\n");
+    put(data / "lilt/models/ggml-shared.bin", "lilt");
+    put(data / "ptt/models/ggml-shared.bin", "ptt");
+    put(data / "ptt/models/ggml-fallback.bin", "fallback");
+    put(data / "lilt/models/ggml-existing.bin", "old");
+    put(data / "ren/models/ggml-existing.bin", "current");
+    put(data / "lilt/models/ggml-unfinished.bin.part", "partial");
+    expect(ren::detail::migrate_legacy_state(config, data).empty(), "Legacy import succeeds");
+    expect(read(config / "ren/config.ini") == read(config / "lilt/config.ini"), "Lilt settings precede PTT");
+    expect(!fs::equivalent(config / "ren/config.ini", config / "lilt/config.ini"), "Settings are copied independently");
+    expect(read(data / "ren/models/ggml-shared.bin") == "lilt", "Lilt models precede PTT");
+    expect(read(data / "ren/models/ggml-fallback.bin") == "fallback", "PTT fills missing models");
+    expect(read(data / "ren/models/ggml-existing.bin") == "current", "Existing Ren models win");
+    expect(!fs::exists(data / "ren/models/ggml-unfinished.bin.part"), "Incomplete downloads are skipped");
+    fs::remove(data / "ren/models/ggml-shared.bin");
+    expect(ren::detail::migrate_legacy_state(config, data).empty(), "Repeated import succeeds");
+    expect(!fs::exists(data / "ren/models/ggml-shared.bin"), "Marker prevents deleted models returning");
+    expect(read(data / "lilt/models/ggml-shared.bin") == "lilt", "Legacy models remain untouched");
+    put(config / "ren/config.ini", "[ren]\nmodel=base.en-q5_1\n");
+    fs::remove(data / "ren/.legacy-migration-complete");
+    put(data / "lilt/.legacy-migration-complete", "");
+    fs::remove(data / "ren/models/ggml-fallback.bin");
+    expect(ren::detail::migrate_legacy_state(config, data).empty(), "Import can resume safely");
+    expect(read(config / "ren/config.ini") == "[ren]\nmodel=base.en-q5_1\n", "Existing Ren settings win");
+    expect(!fs::exists(data / "ren/models/ggml-fallback.bin"), "Completed Lilt migration suppresses old PTT models");
 }
 
 } // namespace
@@ -272,7 +312,7 @@ int main() {
     try {
         const std::array<double, 3> tones{150, 700, 3000};
         for (std::size_t band = 0; band < tones.size(); ++band) {
-            lilt::AudioBands meter;
+            ren::AudioBands meter;
             for (int sample = 0; sample < 16000; ++sample)
                 meter.add(0.1 * std::sin(2 * 3.141592653589793 * tones[band] * sample / 16000));
             const auto levels = meter.take();
@@ -280,7 +320,7 @@ int main() {
                 if (other != band) expect(levels[band] > levels[other], "Tone activates its frequency band");
             expect(meter.take() == std::array<double, 3>{}, "Empty interval has no band energy");
         }
-        lilt::AudioBands silence;
+        ren::AudioBands silence;
         for (int sample = 0; sample < 1600; ++sample) silence.add(0);
         expect(silence.take() == std::array<double, 3>{}, "Silence leaves all bands still");
         TemporaryDirectory directory;
@@ -288,7 +328,8 @@ int main() {
         preview_tests();
         audio_tests(directory.path);
         lifecycle_tests(directory.path);
-        std::cout << "Text safety, preview boundaries/coalescing, WAV validation, silence gating, and capture cancellation passed.\n";
+        migration_tests(directory.path);
+        std::cout << "Text, audio, capture lifecycle, and settings/model migration checks passed.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Test failed: " << error.what() << '\n';

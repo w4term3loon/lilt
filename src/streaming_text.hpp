@@ -9,7 +9,7 @@
 #include <string_view>
 #include <utility>
 
-namespace lilt::detail {
+namespace ren::detail {
 
 // Inputs are normalized UTF-8 hypotheses. A space-terminated common prefix
 // contains complete words and always ends at a UTF-8 byte boundary. The last
@@ -65,4 +65,4 @@ private:
     bool closed_ = false;
 };
 
-} // namespace lilt::detail
+} // namespace ren::detail

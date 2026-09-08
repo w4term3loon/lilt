@@ -6,7 +6,7 @@
 #include <atomic>
 #include <memory>
 
-namespace lilt {
+namespace ren {
 class App {
 public:
     App();

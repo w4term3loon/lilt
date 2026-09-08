@@ -84,7 +84,7 @@ function componentDescription(name) {
     ]);
     return new GLib.Variant('(sa{sv}ssssssssavav)', [
         'IBusComponent', {},
-        `io.github.lilt.Dictation.${GLib.uuid_string_random().replaceAll('-', '')}`,
+        `io.github.ren.Dictation.${GLib.uuid_string_random().replaceAll('-', '')}`,
         'Local dictation', '1', 'GPL-3.0-or-later', '', '', '', '', [], [engine],
     ]);
 }
@@ -142,7 +142,7 @@ export class Composition {
         if (this._session)
             return Promise.reject(new Error('The previous dictation is still finishing.'));
         const session = {
-            name: `lilt-dictation-${GLib.uuid_string_random()}`,
+            name: `ren-dictation-${GLib.uuid_string_random()}`,
             originalContext: null, focusedContext: null, previousEngine: null,
             capabilities: 0, cancelled: false, closing: false, ready: false,
             committed: false, lost: false, focusSerial: 0,
@@ -179,7 +179,7 @@ export class Composition {
             session.previousEngine = await engineName(session.connection);
             this._check(session);
             if (!session.previousEngine ||
-                session.previousEngine.startsWith('lilt-dictation-'))
+                session.previousEngine.startsWith('ren-dictation-'))
                 throw new Error('Focus an editable text field and try again.');
             const embedded = await property(session.connection, 'EmbedPreeditText');
             if (!embedded.get_boolean())
@@ -223,7 +223,7 @@ export class Composition {
     _createEngine(session) {
         const engine = new IBus.Engine({
             engine_name: session.name,
-            object_path: '/io/github/lilt/Dictation/Engine',
+            object_path: '/io/github/ren/Dictation/Engine',
             connection: session.connection,
             has_focus_id: true,
         });

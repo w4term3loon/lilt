@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install lilt for the current user, without sudo."""
+"""Install ren for the current user, without sudo."""
 
 import argparse
 import ast
@@ -43,7 +43,7 @@ def install(binary):
     extensions = DATA / 'gnome-shell/extensions'
     extensions.mkdir(parents=True, exist_ok=True)
     target = extensions / uuid
-    with tempfile.TemporaryDirectory(prefix='.lilt-', dir=extensions) as temporary:
+    with tempfile.TemporaryDirectory(prefix='.ren-', dir=extensions) as temporary:
         prepared = Path(temporary) / uuid
         prepared.mkdir()
         files = [*ROOT.glob('extension/*.js'), *ROOT.glob('extension/*.svg'), ROOT / 'extension/metadata.json',
@@ -52,11 +52,11 @@ def install(binary):
             copy(source, prepared / source.relative_to(ROOT / 'extension'))
         copy(ROOT / 'LICENSE', prepared / 'LICENSE')
         subprocess.run(['glib-compile-schemas', '--strict', str(prepared / 'schemas')], check=True)
-        copy(binary, PREFIX / 'bin/lilt')
+        copy(binary, PREFIX / 'bin/ren')
         for name in ('download-model.py', 'uninstall.py'):
-            copy(ROOT / 'scripts' / name, PREFIX / 'share/lilt' / name)
+            copy(ROOT / 'scripts' / name, PREFIX / 'share/ren' / name)
         for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'LICENSES/whisper.cpp-MIT.txt'):
-            copy(ROOT / name, PREFIX / 'share/lilt' / name)
+            copy(ROOT / name, PREFIX / 'share/ren' / name)
         previous = Path(temporary) / 'previous'
         if target.exists():
             target.rename(previous)
@@ -67,40 +67,55 @@ def install(binary):
                 previous.rename(target)
             raise
 
-    # A stale PTT service starts lilt under the wrong bus name and times out.
-    run('gnome-extensions', 'disable', 'ptt@local')
-    legacy = extensions / 'ptt@local'
-    if legacy.is_symlink():
-        legacy.unlink()
-    elif legacy.exists():
-        shutil.rmtree(legacy)
-    for directory, suffix in (('dbus-1/services', 'service'), ('applications', 'desktop')):
-        (DATA / directory / f'io.github.ptt.Dictation.{suffix}').unlink(missing_ok=True)
-    alias = PREFIX / 'bin/ptt'
-    if alias.is_symlink() and alias.resolve() == PREFIX / 'bin/lilt':
+    alias = PREFIX / 'bin/youlilt'
+    if alias.is_symlink() and alias.resolve() in (PREFIX / 'bin/lilt', PREFIX / 'bin/ren'):
         alias.unlink()
-    for obsolete in ('install_support.py', 'install.json'):
-        (PREFIX / 'share/lilt' / obsolete).unlink(missing_ok=True)
+    # Retire old launchers together; stale bus names cause activation timeouts.
+    for old in ('lilt', 'ptt'):
+        run('gnome-extensions', 'disable', f'{old}@local')
+        old_binary = PREFIX / 'bin' / old
+        if old_binary.exists():
+            run(str(old_binary), '--quit')
+        old_binary.unlink(missing_ok=True)
+        legacy = extensions / f'{old}@local'
+        if legacy.is_symlink():
+            legacy.unlink()
+        elif legacy.exists():
+            shutil.rmtree(legacy)
+        for directory, suffix in (('dbus-1/services', 'service'), ('applications', 'desktop'),
+                                  ('icons/hicolor/scalable/apps', 'svg')):
+            (DATA / directory / f'io.github.{old}.Dictation.{suffix}').unlink(missing_ok=True)
+    # Keep pinned launcher positions when replacing the application identity.
+    try:
+        favorites = ast.literal_eval(subprocess.check_output(
+            ['gsettings', 'get', 'org.gnome.shell', 'favorite-apps'], text=True, timeout=5).strip().removeprefix('@as '))
+        updated = list(dict.fromkeys('io.github.ren.Dictation.desktop' if entry in
+            ('io.github.lilt.Dictation.desktop', 'io.github.ptt.Dictation.desktop') else entry for entry in favorites))
+        if updated != favorites:
+            run('gsettings', 'set', 'org.gnome.shell', 'favorite-apps', repr(updated))
+    except (OSError, ValueError, SyntaxError, subprocess.SubprocessError):
+        pass
+    # Legacy settings and models remain available for the native migration.
 
-    binary = PREFIX / 'bin/lilt'
+    binary = PREFIX / 'bin/ren'
     # Desktop Exec and D-Bus Exec use different quoting rules.
     quoted = str(binary).replace('\\', '\\\\').replace('"', '\\"').replace('`', '\\`').replace('$', '\\$').replace('%', '%%')
     quoted = '"' + quoted.replace('\\', '\\\\') + '"'
     service_command = shlex.quote(str(binary)).replace('\\', '\\\\')
     registrations = {
-        'applications/io.github.lilt.Dictation.desktop':
-            '[Desktop Entry]\nType=Application\nName=lilt\n'
-            f'Exec={quoted}\nIcon=io.github.lilt.Dictation\nTerminal=false\nCategories=Utility;Accessibility;\n',
-        'dbus-1/services/io.github.lilt.Dictation.service':
-            '[D-BUS Service]\nName=io.github.lilt.Dictation\n'
+        'applications/io.github.ren.Dictation.desktop':
+            '[Desktop Entry]\nType=Application\nName=Ren\n'
+            f'Exec={quoted}\nIcon=io.github.ren.Dictation\nTerminal=false\nCategories=Utility;Accessibility;\n',
+        'dbus-1/services/io.github.ren.Dictation.service':
+            '[D-BUS Service]\nName=io.github.ren.Dictation\n'
             f'Exec={service_command} --daemon\n',
     }
     for name, content in registrations.items():
         path = DATA / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
-    copy(ROOT / 'data/io.github.lilt.Dictation.svg',
-         DATA / 'icons/hicolor/scalable/apps/io.github.lilt.Dictation.svg')
+    copy(ROOT / 'data/io.github.ren.Dictation.svg',
+         DATA / 'icons/hicolor/scalable/apps/io.github.ren.Dictation.svg')
     run('gdbus', 'call', '--session', '--dest', 'org.freedesktop.DBus',
         '--object-path', '/org/freedesktop/DBus', '--method', 'org.freedesktop.DBus.ReloadConfig')
     run('gtk-update-icon-cache', '-f', '-t', str(DATA / 'icons/hicolor'))
@@ -109,16 +124,16 @@ def install(binary):
         # GNOME discovers a newly installed extension at the next login.
         current = subprocess.check_output(['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions'],
                                           text=True, timeout=5).strip().removeprefix('@as ')
-        enabled = [entry for entry in ast.literal_eval(current) if entry not in ('ptt@local', uuid)]
+        enabled = [entry for entry in ast.literal_eval(current) if entry not in ('lilt@local', 'ptt@local', uuid)]
         subprocess.run(['gsettings', 'set', 'org.gnome.shell', 'enabled-extensions', repr([*enabled, uuid])],
                        check=True, timeout=5)
         print('Log out and back in to load the extension.')
-    print('Installed lilt. Log out and back in after an upgrade.')
+    print('Installed ren. Log out and back in after an upgrade.')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--binary', type=Path, default=ROOT / 'build/lilt')
+    parser.add_argument('--binary', type=Path, default=ROOT / 'build/ren')
     args = parser.parse_args()
     try:
         install(args.binary)

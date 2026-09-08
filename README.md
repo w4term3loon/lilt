@@ -1,4 +1,4 @@
-# lilt
+# Ren
 
 Local English voice typing for Ubuntu 24.04 / GNOME 46 on x86-64.
 
@@ -20,14 +20,14 @@ Models download once, then work offline. Recordings are limited to three minutes
 
 ```bash
 sudo apt install build-essential git cmake pkg-config libgtk-3-dev libpulse-dev python3 gjs gir1.2-ibus-1.0
-git clone https://github.com/w4term3loon/lilt.git
-cd lilt
+git clone https://github.com/w4term3loon/ren.git
+cd ren
 ./scripts/build.sh -DGGML_NATIVE=ON
 python3 scripts/install.py
 ```
 
 Log out and back in to load the extension, then download a model in Preferences.
-If a field does not support inline drafts, turn off Live text.
+Existing Lilt settings and downloaded models are imported automatically.
 
 ## Models
 
@@ -54,7 +54,7 @@ On completion, the ring gathers into one dot and fades. Clipboard output also sh
 `scripts/` builds and installs; `tests/` holds two focused checks.
 See the [short roadmap](docs/roadmap.md) for remaining work.
 
-Uninstall with `python3 ~/.local/share/lilt/uninstall.py`; add `--purge-data` to
+Uninstall with `python3 ~/.local/share/ren/uninstall.py`; add `--purge-data` to
 remove settings and models too.
 
 [GPL-3.0-or-later](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)

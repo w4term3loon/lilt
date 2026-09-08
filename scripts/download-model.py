@@ -35,7 +35,7 @@ def default_directory():
     data_home = Path(os.environ.get("XDG_DATA_HOME", ""))
     if not data_home.is_absolute():
         data_home = Path.home() / ".local" / "share"
-    return data_home / "lilt" / "models"
+    return data_home / "ren" / "models"
 
 
 def verified(path, expected_size, expected_sha256):
@@ -63,7 +63,7 @@ def download(model, directory, force=False):
 
     request = urllib.request.Request(
         BASE_URL + "/" + filename,
-        headers={"User-Agent": "lilt-model-downloader/1.0"},
+        headers={"User-Agent": "ren-model-downloader/1.0"},
     )
     temporary_path = None
     try:
