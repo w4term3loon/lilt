@@ -1,28 +1,18 @@
 .lilt-pill {
-    background-color: rgba(28, 28, 32, 0.96);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 19px;
-    padding: 6px 9px;
-    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
-}
-.lilt-wave { spacing: 2px; height: 23px; }
-.lilt-wave-bar {
-    width: 3px;
-    color: #f3ebe5;
-    /* Older JavaScript can stay cached while GNOME reloads this stylesheet. */
-    background-color: #f3ebe5;
-    border-radius: 2px;
-}
-.lilt-wave-canvas {
-    /* New Cairo bars draw their own exact semicircular caps. */
     background-color: transparent;
-    border-radius: 0;
+    border: none;
+    padding: 0;
+    box-shadow: none;
 }
+/* Keep cached GNOME modules visible until the next login. */
+.lilt-wave { spacing: 2px; height: 23px; }
+.lilt-wave-bar { width: 3px; color: #82cbb8; }
 .lilt-dots { spacing: 5px; height: 23px; }
 .lilt-dot {
     width: 5px;
     height: 5px;
     border-radius: 3px;
-    background-color: #b3cbb9;
+    background-color: #82cbb8;
+    border: 1px solid rgba(30, 72, 64, 0.25);
 }
 .lilt-panel-recording { color: #ff726a; }

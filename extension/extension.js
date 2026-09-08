@@ -14,6 +14,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import {insertionText} from './text.js';
 import {Composition} from './composition.js';
+import {drawOrb, voiceIntensity} from './orb.js';
 
 const BUS_NAME = 'io.github.lilt.Dictation';
 const BUS_PATH = '/io/github/lilt/Dictation';
@@ -33,8 +34,6 @@ const BUS_XML = `<node><interface name="${BUS_NAME}">
 </interface></node>`;
 const DictationProxy = Gio.DBusProxy.makeProxyWrapper(BUS_XML);
 const ACTIVE = new Set(['loading', 'recording', 'transcribing']);
-const WAVE_HEIGHTS = [6, 12, 17, 21, 23, 21, 17, 12, 6];
-const BAR_WIDTH = 3;
 const MODS = Clutter.ModifierType;
 const SHORTCUT_MODIFIERS = MODS.SHIFT_MASK | MODS.CONTROL_MASK |
     MODS.MOD1_MASK | MODS.SUPER_MASK;
@@ -196,7 +195,6 @@ export default class LiltExtension extends Extension {
         Main.layoutManager.removeChrome(this._pill);
         this._pill.destroy();
         this._pill = null;
-        this._bars = null;
         this._wave = null;
         this._dots = null;
         this._dotBox = null;
@@ -233,36 +231,19 @@ export default class LiltExtension extends Extension {
         });
         const content = new St.Widget({
             layout_manager: new Clutter.BinLayout(),
-            width: 43, height: 23,
+            width: 64, height: 64,
         });
-        this._wave = new St.BoxLayout({
-            style_class: 'lilt-wave',
+        this._wave = new St.DrawingArea({
+            width: 64, height: 64,
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
         });
-        this._bars = WAVE_HEIGHTS.map(height => {
-            const bar = new St.DrawingArea({
-                style_class: 'lilt-wave-bar lilt-wave-canvas',
-                height: Math.max(BAR_WIDTH, height * 0.22),
-                y_align: Clutter.ActorAlign.CENTER,
-            });
-            bar.connect('repaint', () => {
-                const [width, height] = bar.get_surface_size();
-                const radius = width / 2;
-                const color = bar.get_theme_node().get_foreground_color();
-                const context = bar.get_context();
-                context.setSourceRGBA(color.red / 255, color.green / 255,
-                    color.blue / 255, color.alpha / 255);
-                // Keep the exact half-pixel radius at this small size; theme
-                // borders round it down and make a 3 px bar look square.
-                context.arc(radius, height - radius, radius, 0, Math.PI);
-                context.arc(radius, radius, radius, Math.PI, Math.PI * 2);
-                context.closePath();
-                context.fill();
-                context.$dispose();
-            });
-            this._wave.add_child(bar);
-            return bar;
+        this._wave.connect('repaint', () => {
+            const context = this._wave.get_context();
+            const [width, height] = this._wave.get_surface_size();
+            drawOrb(context, width, height, this._orbLevel ?? 0,
+                (GLib.get_monotonic_time() - (this._orbStarted ?? 0)) / 1000000);
+            context.$dispose();
         });
         content.add_child(this._wave);
         this._dotBox = new St.BoxLayout({
@@ -561,8 +542,9 @@ export default class LiltExtension extends Extension {
         this._dotBox.visible = active && !recording;
         if (recording) {
             this._stopDots();
-            this._drawWave(this._proxy?.Level || 0);
+            this._startOrb();
         } else if (active) {
+            this._stopOrb();
             this._startDots();
         } else {
             this._stopWave();
@@ -576,25 +558,31 @@ export default class LiltExtension extends Extension {
         }
     }
 
-    _drawWave(level) {
-        const intensity = Math.sqrt(Math.min(1, Math.max(0, level)));
-        for (const [index, bar] of this._bars.entries()) {
-            // A circular envelope expands with microphone intensity. The bars
-            // represent loudness, not invented frequency information.
-            const center = 1 - Math.abs(index - 4) / 5;
-            const scale = 0.22 + intensity * (0.50 + center * 0.28);
-            // Resize the geometry so the circular caps retain their radius.
-            // Transform scaling would squash them flat at low microphone levels.
-            bar.ease({height: Math.max(BAR_WIDTH, WAVE_HEIGHTS[index] * scale), opacity: 240,
-                duration: 90, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
+    _startOrb() {
+        if (this._orbSource)
+            return;
+        this._orbLevel = 0;
+        this._orbStarted = GLib.get_monotonic_time();
+        this._wave.queue_repaint();
+        this._orbSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 40, () => {
+            const target = voiceIntensity(this._proxy?.Level || 0);
+            this._orbLevel += (target - this._orbLevel) * (target > this._orbLevel ? 0.4 : 0.18);
+            this._wave.queue_repaint();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _stopOrb() {
+        if (this._orbSource) {
+            GLib.source_remove(this._orbSource);
+            this._orbSource = 0;
         }
+        this._orbLevel = 0;
     }
 
     _startDots() {
         if (this._dotSource)
             return;
-        for (const bar of this._bars)
-            bar.remove_all_transitions();
         const started = GLib.get_monotonic_time();
         const draw = () => {
             const elapsed = (GLib.get_monotonic_time() - started) / 1000000;
@@ -626,9 +614,8 @@ export default class LiltExtension extends Extension {
     }
 
     _stopWave() {
+        this._stopOrb();
         this._stopDots();
-        for (const bar of this._bars ?? [])
-            bar.remove_all_transitions();
     }
 
     _positionPill() {

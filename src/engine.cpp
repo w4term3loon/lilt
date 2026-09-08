@@ -421,7 +421,7 @@ std::vector<float> capture_audio(std::atomic<bool>& stop, std::atomic<bool>& can
         const auto now = Clock::now();
         if (now - last_level >= 100ms) {
             const double rms = level_count ? std::sqrt(level_energy / level_count) : 0;
-            notify(callbacks.on_level, std::clamp(rms * 5.0, 0.0, 1.0));
+            notify(callbacks.on_level, rms);
             last_level = now;
             level_energy = 0;
             level_count = 0;
