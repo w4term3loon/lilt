@@ -239,12 +239,13 @@ export default class LiltExtension extends Extension {
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
         });
+        this._wave.set_pivot_point(0.5, 0.5);
         this._wave.connect('repaint', () => {
             const context = this._wave.get_context();
             const [width, height] = this._wave.get_surface_size();
             drawOrb(context, width, height, this._orbBands ?? [0, 0, 0],
                 (GLib.get_monotonic_time() - (this._orbStarted ?? 0)) / 1000000,
-                isBrowserCommandPreview(this._latestPartial?.text ?? ''));
+                this._orbCommandMix ?? 0);
             context.$dispose();
         });
         content.add_child(this._wave);
@@ -561,29 +562,51 @@ export default class LiltExtension extends Extension {
     }
 
     _startOrb() {
-        if (this._orbSource)
+        if (this._orbTimeline)
             return;
         this._orbBands = [0, 0, 0];
+        this._orbCommand = false;
+        this._orbCommandMix = 0;
         this._orbStarted = GLib.get_monotonic_time();
+        let lastFrame = this._orbStarted;
         this._wave.queue_repaint();
-        this._orbSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 40, () => {
+        // Follow the display's frame clock instead of an independent 25 Hz timer.
+        this._orbTimeline = new Clutter.Timeline({actor: this._wave, duration: 1000, repeat_count: -1});
+        this._orbFrameSignal = this._orbTimeline.connect('new-frame', () => {
+            const now = GLib.get_monotonic_time();
+            const dt = Math.min(0.1, (now - lastFrame) / 1000000);
+            lastFrame = now;
+            const command = this._orbCommandPreview ?? false;
+            if (command !== this._orbCommand) {
+                this._orbCommand = command;
+                this._wave.ease({scale_x: command ? 1.18 : 1, scale_y: command ? 1.18 : 1,
+                    duration: 280, mode: Clutter.AnimationMode.EASE_IN_OUT_CUBIC});
+            }
+            this._orbCommandMix += (Number(command) - this._orbCommandMix) * (1 - Math.exp(-dt / 0.075));
+            if (Math.abs(Number(command) - this._orbCommandMix) < 0.002)
+                this._orbCommandMix = Number(command);
             const activity = voiceIntensity(this._proxy?.Level || 0);
             const bands = this._proxy?.Bands ?? [0, 0, 0];
             const peak = Math.max(0.001, ...bands);
             for (let i = 0; i < 3; i++) {
                 const target = activity * bands[i] / peak;
-                this._orbBands[i] += (target - this._orbBands[i]) * (target > this._orbBands[i] ? 0.55 : 0.22);
+                const response = target > this._orbBands[i] ? 0.05 : 0.16;
+                this._orbBands[i] += (target - this._orbBands[i]) * (1 - Math.exp(-dt / response));
             }
             this._wave.queue_repaint();
-            return GLib.SOURCE_CONTINUE;
         });
+        this._orbTimeline.start();
     }
 
     _stopOrb() {
-        if (this._orbSource) {
-            GLib.source_remove(this._orbSource);
-            this._orbSource = 0;
+        if (this._orbTimeline) {
+            this._orbTimeline.stop();
+            this._orbTimeline.disconnect(this._orbFrameSignal);
+            this._orbTimeline = null;
         }
+        this._wave?.remove_all_transitions();
+        this._wave?.set_scale(1, 1);
+        this._orbCommandMix = 0;
         this._orbBands = [0, 0, 0];
     }
 
@@ -642,11 +665,13 @@ export default class LiltExtension extends Extension {
             !ACTIVE.has(this._state) || !this._target || this._pendingText !== null)
             return;
         this._latestPartial = {text, stableBytes};
+        this._orbCommandPreview = isBrowserCommandPreview(text);
         this._composition?.update(text, stableBytes);
     }
 
     _clearDraft() {
         this._latestPartial = null;
+        this._orbCommandPreview = false;
         this._composition?.update('', 0);
     }
 

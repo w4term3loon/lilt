@@ -28,27 +28,30 @@ const wisps = Array.from({length: 36}, (_, i) => ({
     phase: random(103 + i * 4) * 100,
 }));
 
-function mist(red, green, blue) {
+function mist() {
     const surface = new Cairo.ImageSurface(Cairo.Format.ARGB32, 24, 24);
     const context = new Cairo.Context(surface);
     const gradient = new Cairo.RadialGradient(12, 12, 0, 12, 12, 12);
     for (const [radius, alpha] of [[0, 0.5], [0.25, 0.3], [0.6, 0.09], [1, 0]])
-        gradient.addColorStopRGBA(radius, red, green, blue, alpha);
+        gradient.addColorStopRGBA(radius, 1, 1, 1, alpha);
     context.setSource(gradient);
     context.paint();
     context.$dispose();
     return surface;
 }
-// Reuse two small soft sprites; no per-frame blur, texture generation, or library.
-const orange = mist(1, 0.43, 0.08);
-const purple = mist(0.72, 0.37, 1);
+// Reuse one tiny opacity mask; color changes need no new textures or blur.
+const mask = mist();
+// Ubuntu orange #E95420 and light aubergine #77216F (official brand palette).
+const orange = [233 / 255, 84 / 255, 32 / 255];
+const purple = [119 / 255, 33 / 255, 111 / 255];
 
 export function voiceIntensity(rms) {
     const signal = Math.max(0, (rms - 0.008) / 0.07);
     return signal / (1 + signal);
 }
 
-export function drawOrb(context, width, height, bands, elapsed, command = false) {
+export function drawOrb(context, width, height, bands, elapsed, command = 0) {
+    const color = orange.map((value, i) => value + (purple[i] - value) * command);
     const centers = clusters.map((cluster, i) => ({
         x: cluster.x + 4 * noise(elapsed * 0.45 + cluster.phase)
             + bands[0] * 4 * noise(elapsed * 1.3 + cluster.phase),
@@ -69,8 +72,8 @@ export function drawOrb(context, width, height, bands, elapsed, command = false)
         context.save();
         context.translate(x, y);
         context.scale(size / 12, size / 12);
-        context.setSourceSurface(command ? purple : orange, -12, -12);
-        context.paintWithAlpha(0.65 + center.strength * 0.3);
+        context.setSourceRGBA(...color, 0.65 + center.strength * 0.3);
+        context.maskSurface(mask, -12, -12);
         context.restore();
     }
     context.restore();
