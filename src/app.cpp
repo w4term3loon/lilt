@@ -420,14 +420,14 @@ void App::show() {
     if (!window_) build_ui();
     refresh(); gtk_widget_show_all(window_);
     gtk_widget_set_visible(recovery_, state_ == "error" && !last_transcript_.empty());
-    gtk_window_resize(GTK_WINDOW(window_), 360, 1);
+    gtk_window_resize(GTK_WINDOW(window_), 400, 1);
     gtk_window_present(GTK_WINDOW(window_));
 }
 void App::build_ui() {
     building_ui_ = true;
     window_ = gtk_application_window_new(app_);
     gtk_window_set_title(GTK_WINDOW(window_), "Ren");
-    gtk_window_set_default_size(GTK_WINDOW(window_), 360, 1);
+    gtk_window_set_default_size(GTK_WINDOW(window_), 400, 1);
     gtk_window_set_resizable(GTK_WINDOW(window_), FALSE);
     gtk_window_set_icon_name(GTK_WINDOW(window_), kInterface);
     gtk_style_context_add_class(gtk_widget_get_style_context(window_), "ren-preferences");
@@ -440,17 +440,23 @@ void App::build_ui() {
     gtk_css_provider_load_from_data(css, R"(
         .ren-preferences .ren-card {
             background-color: @theme_base_color;
-            border: 1px solid alpha(@theme_fg_color, 0.10);
-            border-radius: 12px;
+            border: 1px solid alpha(@theme_fg_color, 0.08);
+            border-radius: 16px;
             padding: 16px;
+            box-shadow: 0 2px 6px alpha(@theme_fg_color, 0.03);
         }
-        .ren-preferences .ren-field { font-weight: 500; }
-        .ren-preferences .ren-status { font-size: 12px; }
+        .ren-preferences .ren-field { font-weight: 600; }
+        .ren-preferences .ren-status { font-size: 0.92em; }
+        .ren-preferences .ren-divider { background-color: alpha(@theme_fg_color, 0.08); }
+        .ren-model-details .ren-title { font-size: 1.25em; font-weight: 600; }
+        .ren-model-details .ren-subtitle { font-family: monospace; font-size: 0.92em; }
+        .ren-model-details .ren-secondary { color: alpha(@theme_fg_color, 0.78); }
+        .ren-model-details .ren-source-link { padding: 0; min-height: 24px; }
     )", -1, nullptr);
     gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(css);
-    auto* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
-    gtk_container_set_border_width(GTK_CONTAINER(box), 20);
+    auto* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
+    gtk_container_set_border_width(GTK_CONTAINER(box), 24);
     gtk_container_add(GTK_CONTAINER(window_), box);
     status_label_ = label("", "ren-status");
     gtk_widget_set_no_show_all(status_label_, TRUE);
@@ -458,12 +464,15 @@ void App::build_ui() {
     gtk_widget_set_halign(status_label_, GTK_ALIGN_CENTER);
     gtk_label_set_xalign(GTK_LABEL(status_label_), 0.5);
     gtk_label_set_justify(GTK_LABEL(status_label_), GTK_JUSTIFY_CENTER);
-    auto* grid = gtk_grid_new();
-    gtk_style_context_add_class(gtk_widget_get_style_context(grid), "ren-card");
-    gtk_widget_set_halign(grid, GTK_ALIGN_CENTER);
-    gtk_grid_set_row_spacing(GTK_GRID(grid), 12);
-    gtk_grid_set_column_spacing(GTK_GRID(grid), 18);
-    auto row = [&](const char* title, GtkWidget* control, int position) {
+    auto card = [&] {
+        auto* grid = gtk_grid_new();
+        gtk_style_context_add_class(gtk_widget_get_style_context(grid), "ren-card");
+        gtk_grid_set_row_spacing(GTK_GRID(grid), 12);
+        gtk_grid_set_column_spacing(GTK_GRID(grid), 24);
+        pack(box, grid);
+        return grid;
+    };
+    auto row = [&](GtkWidget* grid, const char* title, GtkWidget* control, int position) {
         auto* field = label(title, "ren-field");
         gtk_widget_set_size_request(field, 72, 36);
         gtk_widget_set_valign(field, GTK_ALIGN_CENTER);
@@ -471,46 +480,59 @@ void App::build_ui() {
         gtk_widget_set_hexpand(control, TRUE);
         gtk_grid_attach(GTK_GRID(grid), field, 0, position, 1, 1);
         gtk_grid_attach(GTK_GRID(grid), control, 1, position, 1, 1);
+        gtk_label_set_mnemonic_widget(GTK_LABEL(field), control);
     };
-    pack(box, grid);
+    auto* model_card = card();
+    auto* model_label = label("Model", "ren-field");
+    gtk_widget_set_valign(model_label, GTK_ALIGN_CENTER);
+    gtk_grid_attach(GTK_GRID(model_card), model_label, 0, 0, 1, 1);
+    model_details_ = gtk_button_new_with_label("Model details");
+    gtk_button_set_relief(GTK_BUTTON(model_details_), GTK_RELIEF_NONE);
+    gtk_widget_set_halign(model_details_, GTK_ALIGN_END);
+    gtk_widget_set_hexpand(model_details_, TRUE);
+    gtk_grid_attach(GTK_GRID(model_card), model_details_, 1, 0, 1, 1);
+    g_signal_connect(model_details_, "clicked", G_CALLBACK(+[](GtkButton*, gpointer d) { static_cast<App*>(d)->show_model_details(); }), this);
     model_combo_ = gtk_combo_box_text_new();
     for (const auto& model : kModels)
         gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(model_combo_), model.id, model.title);
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(model_combo_), "custom", "Custom file…");
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(model_combo_), model_.c_str());
     GList* cells = gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(model_combo_));
-    for (GList* cell = cells; cell; cell = cell->next) g_object_set(cell->data, "xalign", 0.5f, nullptr);
+    for (GList* cell = cells; cell; cell = cell->next) g_object_set(cell->data, "xalign", 0.0f, nullptr);
     g_list_free(cells);
-    auto* model_controls = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-    pack(model_controls, model_combo_);
-    model_details_ = gtk_button_new_with_label("Model details");
-    gtk_button_set_relief(GTK_BUTTON(model_details_), GTK_RELIEF_NONE);
-    pack(model_controls, model_details_);
-    g_signal_connect(model_details_, "clicked", G_CALLBACK(+[](GtkButton*, gpointer d) { static_cast<App*>(d)->show_model_details(); }), this);
+    gtk_grid_attach(GTK_GRID(model_card), model_combo_, 0, 1, 2, 1);
+    gtk_label_set_mnemonic_widget(GTK_LABEL(model_label), model_combo_);
     download_button_ = gtk_button_new_with_label("Download model");
     gtk_widget_set_no_show_all(download_button_, TRUE);
-    pack(model_controls, download_button_);
-    row("Model", model_controls, 0);
+    gtk_grid_attach(GTK_GRID(model_card), download_button_, 0, 2, 2, 1);
+    auto* grid = card();
     shortcut_button_ = gtk_button_new();
-    row("Start", shortcut_button_, 1);
+    row(grid, "Start", shortcut_button_, 0);
     finish_button_ = gtk_button_new();
-    row("Finish", finish_button_, 2);
+    row(grid, "Finish", finish_button_, 1);
     preview_switch_ = gtk_switch_new();
     gtk_switch_set_active(GTK_SWITCH(preview_switch_), live_preview_);
-    gtk_widget_set_halign(preview_switch_, GTK_ALIGN_CENTER);
+    gtk_widget_set_halign(preview_switch_, GTK_ALIGN_END);
     gtk_widget_set_valign(preview_switch_, GTK_ALIGN_CENTER);
     gtk_widget_set_tooltip_text(preview_switch_, "Show text while you speak.");
     auto* preview_control = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_box_pack_start(GTK_BOX(preview_control), preview_switch_, TRUE, TRUE, 0);
-    row("Live text", preview_control, 3);
+    gtk_box_pack_end(GTK_BOX(preview_control), preview_switch_, FALSE, FALSE, 0);
+    row(grid, "Live text", preview_control, 2);
+    atk_object_set_name(gtk_widget_get_accessible(preview_switch_), "Live text");
+    auto* divider = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_style_context_add_class(gtk_widget_get_style_context(divider), "ren-divider");
+    gtk_grid_attach(GTK_GRID(grid), divider, 0, 3, 2, 1);
+    auto* vocabulary_label = label("Vocabulary", "ren-field");
+    gtk_grid_attach(GTK_GRID(grid), vocabulary_label, 0, 4, 2, 1);
     vocabulary_entry_ = gtk_entry_new();
     gtk_entry_set_max_length(GTK_ENTRY(vocabulary_entry_), 512);
     gtk_entry_set_width_chars(GTK_ENTRY(vocabulary_entry_), 14);
-    gtk_entry_set_alignment(GTK_ENTRY(vocabulary_entry_), 0.5);
+    gtk_entry_set_alignment(GTK_ENTRY(vocabulary_entry_), 0);
     gtk_entry_set_placeholder_text(GTK_ENTRY(vocabulary_entry_), "Names, terms…");
     gtk_entry_set_text(GTK_ENTRY(vocabulary_entry_), vocabulary_.c_str());
     gtk_widget_set_tooltip_text(vocabulary_entry_, "Optional words to help recognition. Stored locally.");
-    row("Vocabulary", vocabulary_entry_, 4);
+    gtk_grid_attach(GTK_GRID(grid), vocabulary_entry_, 0, 5, 2, 1);
+    gtk_label_set_mnemonic_widget(GTK_LABEL(vocabulary_label), vocabulary_entry_);
     pack(box, status_label_);
     sound_settings_ = gtk_button_new_with_label("Open Sound Settings");
     gtk_widget_set_halign(sound_settings_, GTK_ALIGN_CENTER);
@@ -576,43 +598,101 @@ void App::refresh() {
 }
 
 void App::show_model_details() {
-    auto* popover = gtk_popover_new(model_details_);
-    auto* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-    gtk_container_set_border_width(GTK_CONTAINER(box), 16);
-    gtk_container_add(GTK_CONTAINER(popover), box);
+    auto* dialog = gtk_dialog_new_with_buttons("Model details", GTK_WINDOW(window_),
+        static_cast<GtkDialogFlags>(GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT | GTK_DIALOG_USE_HEADER_BAR), nullptr, nullptr);
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 380, -1);
+    gtk_window_set_resizable(GTK_WINDOW(dialog), FALSE);
+    gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(gtk_dialog_get_header_bar(GTK_DIALOG(dialog))), TRUE);
+    gtk_style_context_add_class(gtk_widget_get_style_context(dialog), "ren-model-details");
+    g_signal_connect_object(window_, "hide", G_CALLBACK(gtk_widget_destroy), dialog, G_CONNECT_SWAPPED);
+    auto* scroll = gtk_scrolled_window_new(nullptr, nullptr);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(scroll), TRUE);
+    gtk_scrolled_window_set_propagate_natural_width(GTK_SCROLLED_WINDOW(scroll), TRUE);
+    GdkRectangle workarea{0, 0, 0, 640};
+    if (auto* monitor = gdk_display_get_monitor_at_window(gtk_widget_get_display(window_), gtk_widget_get_window(window_)))
+        gdk_monitor_get_workarea(monitor, &workarea);
+    gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(scroll), std::clamp(workarea.height - 120, 160, 520));
+    pack(gtk_dialog_get_content_area(GTK_DIALOG(dialog)), scroll);
+    auto* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
+    gtk_container_set_border_width(GTK_CONTAINER(box), 24);
+    gtk_container_add(GTK_CONTAINER(scroll), box);
     const bool custom = model_ == "custom";
     std::error_code error;
     const auto bytes = std::filesystem::file_size(model_path(), error);
-    const std::string name = custom ? std::filesystem::path(custom_model_).filename().string() : "Whisper " + model_;
-    auto* title = label(name.c_str());
-    gtk_label_set_max_width_chars(GTK_LABEL(title), 32);
-    gtk_label_set_ellipsize(GTK_LABEL(title), PANGO_ELLIPSIZE_MIDDLE);
-    pack(box, title);
+    std::string name = "Custom model";
+    if (!custom) {
+        name = "Whisper " + model_;
+        for (const auto& model : kModels)
+            if (model_ == model.id) name = std::string("Whisper ") + model.title;
+    }
+    auto* heading = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    pack(heading, label(name.c_str(), "ren-title"));
+    const auto filename = custom ? std::filesystem::path(custom_model_).filename().string() : "ggml-" + model_ + ".bin";
+    auto* subtitle = label(filename.c_str(), "ren-subtitle");
+    gtk_style_context_add_class(gtk_widget_get_style_context(subtitle), "ren-secondary");
+    gtk_label_set_line_wrap(GTK_LABEL(subtitle), FALSE);
+    gtk_label_set_max_width_chars(GTK_LABEL(subtitle), 32);
+    gtk_label_set_ellipsize(GTK_LABEL(subtitle), PANGO_ELLIPSIZE_MIDDLE);
+    gtk_widget_set_tooltip_text(subtitle, filename.c_str());
+    pack(heading, subtitle);
+    pack(box, heading);
+    auto* facts = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(facts), 10);
+    gtk_grid_set_column_spacing(GTK_GRID(facts), 20);
+    int position = 0;
+    auto fact = [&](const char* title, GtkWidget* value) {
+        auto* field = label(title, "ren-secondary");
+        gtk_label_set_line_wrap(GTK_LABEL(field), FALSE);
+        if (GTK_IS_LABEL(value)) gtk_label_set_line_wrap(GTK_LABEL(value), FALSE);
+        gtk_widget_set_valign(field, GTK_ALIGN_BASELINE);
+        gtk_widget_set_halign(value, GTK_ALIGN_START);
+        gtk_widget_set_valign(value, GTK_ALIGN_BASELINE);
+        gtk_grid_attach(GTK_GRID(facts), field, 0, position, 1, 1);
+        gtk_grid_attach(GTK_GRID(facts), value, 1, position++, 1, 1);
+    };
+    auto link = [&](const char* title, const char* text, const std::string& uri) {
+        auto* button = gtk_link_button_new_with_label(uri.c_str(), text);
+        atk_object_set_name(gtk_widget_get_accessible(button), (std::string(title) + ": " + text).c_str());
+        gtk_style_context_add_class(gtk_widget_get_style_context(button), "ren-source-link");
+        fact(title, button);
+    };
     std::string size = error ? "File unavailable" : take(g_format_size_full(bytes, G_FORMAT_SIZE_IEC_UNITS));
     if (error && !custom) {
         for (const auto& model : kModels)
             if (model_ == model.id) size = take(g_format_size_full(model.bytes, G_FORMAT_SIZE_IEC_UNITS)) + " download";
     }
-    pack(box, label(size.c_str()));
-    pack(box, label("Local inference · whisper.cpp · English"));
+    fact("File size", label(size.c_str()));
+    fact("Runs", label("Locally on this device"));
+    fact("Engine", label("whisper.cpp"));
+    fact("Language", label("English"));
+    pack(box, facts);
+    std::string note;
     if (custom) {
-        pack(box, label("User-supplied file · source not verified"));
-        pack(box, label("Compatibility checked when loaded."));
+        fact("Source", label("User-supplied file"));
+        note = "Source not verified. Compatibility is checked when the model is loaded.";
+    } else {
+        link("Original weights", "OpenAI", "https://github.com/openai/whisper");
+        const auto source = "https://huggingface.co/ggerganov/whisper.cpp/blob/98aa99a0a9db05ae2342309f5096248665f7cba3/ggml-" + model_ + ".bin";
+        link("Quantized file", "ggerganov", source);
+        note = "Downloads verified with SHA-256.";
+    }
+    pack(box, gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+    auto* footer = label(note.c_str(), "ren-secondary");
+    gtk_label_set_max_width_chars(GTK_LABEL(footer), 36);
+    pack(box, footer);
+    if (custom) {
         auto* choose = gtk_button_new_with_label("Choose another file…");
         pack(box, choose);
         g_signal_connect(choose, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
-            static_cast<App*>(data)->choose_model();
-        }), this);
-        g_signal_connect_swapped(choose, "clicked", G_CALLBACK(gtk_popover_popdown), popover);
-    } else {
-        pack(box, gtk_link_button_new_with_label("https://github.com/openai/whisper", "Original weights: OpenAI"));
-        const auto source = "https://huggingface.co/ggerganov/whisper.cpp/blob/98aa99a0a9db05ae2342309f5096248665f7cba3/ggml-" + model_ + ".bin";
-        pack(box, gtk_link_button_new_with_label(source.c_str(), "Quantized file: ggerganov"));
-        pack(box, label("Downloads verified with SHA-256"));
+            gtk_dialog_response(GTK_DIALOG(data), GTK_RESPONSE_ACCEPT);
+        }), dialog);
     }
-    g_signal_connect(popover, "closed", G_CALLBACK(+[](GtkPopover* w, gpointer) { gtk_widget_destroy(GTK_WIDGET(w)); }), nullptr);
-    gtk_widget_show_all(popover);
-    gtk_popover_popup(GTK_POPOVER(popover));
+    g_signal_connect(dialog, "response", G_CALLBACK(+[](GtkDialog* w, int response, gpointer data) {
+        gtk_widget_destroy(GTK_WIDGET(w));
+        if (response == GTK_RESPONSE_ACCEPT) static_cast<App*>(data)->choose_model();
+    }), this);
+    gtk_widget_show_all(dialog);
 }
 
 void App::choose_model() {
