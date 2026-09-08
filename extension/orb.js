@@ -23,7 +23,7 @@ const wisps = Array.from({length: 72}, (_, i) => ({
     cluster: i % clusters.length,
     x: (random(100 + i * 4) - 0.5) * 10,
     y: (random(101 + i * 4) - 0.5) * 10,
-    size: 0.7 + random(102 + i * 4) * 0.9,
+    size: 0.6 + random(102 + i * 4) * 0.65,
     phase: random(103 + i * 4) * 100,
 }));
 
@@ -40,9 +40,9 @@ export function drawOrb(context, width, height, bands, elapsed, command = 0, loa
     const color = orange.map((value, i) => value + (purple[i] - value) * command);
     const centers = clusters.map((cluster, i) => ({
         x: cluster.x + 4 * noise(elapsed * 0.45 + cluster.phase)
-            + bands[0] * 14 * noise(elapsed * 1.3 + cluster.phase),
+            + bands[0] * 20 * noise(elapsed * 1.3 + cluster.phase),
         y: cluster.y + 4 * noise(elapsed * 0.45 + cluster.phase + 200)
-            + bands[1] * 14 * noise(elapsed * 1.6 + cluster.phase),
+            + bands[1] * 20 * noise(elapsed * 1.6 + cluster.phase),
         strength: bands[i % 3],
     }));
     context.save();
@@ -52,16 +52,18 @@ export function drawOrb(context, width, height, bands, elapsed, command = 0, loa
     for (const [index, wisp] of wisps.entries()) {
         const center = centers[wisp.cluster];
         const drift = 1.5 + bands[2] * 8;
-        const spread = 1 + center.strength * 0.55;
-        const x = (center.x + wisp.x) * spread + drift * noise(elapsed * 1.8 + wisp.phase);
-        const y = (center.y + wisp.y) * spread + drift * noise(elapsed * 1.8 + wisp.phase + 300);
+        const spread = 1 + center.strength * 0.85;
+        const x = (center.x + wisp.x) * spread + drift * noise(elapsed * 1.2 + wisp.phase);
+        const y = (center.y + wisp.y) * spread + drift * noise(elapsed * 1.2 + wisp.phase + 300);
         const angle = index / wisps.length * Math.PI * 2 + elapsed * 3;
-        const ringX = 20 * Math.cos(angle);
-        const ringY = 20 * Math.sin(angle);
-        const trail = 0.18 + 0.82 * (index / wisps.length) ** 2;
+        const ringX = 28 * Math.cos(angle);
+        const ringY = 28 * Math.sin(angle);
+        const trail = 0.45 + 0.55 * (index / wisps.length) ** 2;
         context.setSourceRGBA(...color, (0.65 + center.strength * 0.35) * (1 - loading) + trail * loading);
-        context.arc(x + (ringX - x) * loading, y + (ringY - y) * loading,
-            wisp.size * (1 - loading) + 0.85 * loading, 0, Math.PI * 2);
+        const expansion = 1 + 1.3 * command;
+        context.arc((x + (ringX - x) * loading) * expansion,
+            (y + (ringY - y) * loading) * expansion,
+            wisp.size * (1 + 0.25 * command), 0, Math.PI * 2);
         context.fill();
     }
     context.restore();

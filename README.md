@@ -5,13 +5,13 @@ Local English voice typing for Ubuntu 24.04 / GNOME 46 on x86-64.
 Press **Ctrl + Super + Space**, speak, then **Enter** to finish or **Escape** to
 cancel. Drafts appear in the focused field; finishing inserts text without
 sending it. The top-bar menu opens preferences for Model, Start, Finish, and
-Live text. Keep the destination field focused while dictating.
+Live text. Without a supported text field, finished dictation goes to the clipboard.
 
 Start with **“open browser”** to launch or focus your default browser automatically.
 The command stays out of the text field; the particles expand in purple, then disappear.
 Live recognition runs with Live text off too; that switch only hides inline drafts.
 
-Audio stays in memory. No cloud transcription, clipboard, or recording history.
+Audio stays in memory. No cloud transcription or recording history.
 Models download once, then work offline. Recordings are limited to three minutes.
 
 ## Install

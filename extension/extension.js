@@ -358,23 +358,22 @@ export default class LiltExtension extends Extension {
             return false;
         this._clearTarget();
         this._target = global.display.focus_window;
-        if (!this._target) {
-            this._error('Focus a text field and try again.');
-            return false;
-        }
-        this._targetSignal = this._target.connect('unmanaged', () => {
+        this._targetSignal = this._target?.connect('unmanaged', () => {
             this._targetSignal = 0;
             this._target = null;
-            this._cancelFromFocus();
+            if (!this._clipboardOnly)
+                this._cancelFromFocus();
         });
         this._targetFocusSignal = global.display.connect('notify::focus-window', () => {
-            if (this._session && this._target && global.display.focus_window !== this._target)
+            if (this._session && !this._clipboardOnly && this._target && global.display.focus_window !== this._target)
                 this._cancelFromFocus();
         });
         this._heldKeys.clear();
         this._sessionFinish = parseShortcut(this._finishShortcut) ?? parseShortcut('Return');
         this._sessionStart = parseShortcut(this._settings.get_strv('toggle-shortcut')[0]);
-        this._sessionLive = this._proxy.LivePreview !== false;
+        this._showLive = this._proxy.LivePreview !== false;
+        this._sessionLive = Boolean(this._target);
+        this._clipboardOnly = !this._target;
         this._finishWaiting = false;
         this._cancelled = false;
         const generation = ++this._generation;
@@ -403,18 +402,30 @@ export default class LiltExtension extends Extension {
                         }) === Clutter.EVENT_STOP;
                     },
                     onLost: () => {
-                        if (this._enabled && generation === this._generation)
+                        if (this._enabled && generation === this._generation && !this._preparing)
                             this._cancelFromFocus();
                     },
                 });
                 this._bindShortcut();
-                await this._composition.begin();
+                const composition = this._composition;
+                try {
+                    await composition.begin();
+                } catch (_error) {
+                    await composition.dispose();
+                    if (!this._enabled || generation !== this._generation || this._cancelled)
+                        return false;
+                    this._composition = null;
+                    this._sessionLive = false;
+                    this._clipboardOnly = true;
+                    this._bindShortcut();
+                }
                 if (!this._enabled || generation !== this._generation || this._cancelled)
                     return false;
-                if (this._latestPartial)
+                if (this._latestPartial && this._showLive && this._composition)
                     this._composition.update(this._latestPartial.text, this._latestPartial.stableBytes);
-            } else {
-                // Final-only mode retains the established Shell key grab.
+            }
+            if (!this._sessionLive) {
+                // Capture finish/cancel keys even when no input field is focused.
                 this._grab = Main.pushModal(this._pill, {actionMode: Shell.ActionMode.POPUP});
                 if (!(this._grab.get_seat_state() & Clutter.GrabState.KEYBOARD))
                     throw new Error('Close the system dialog and try again.');
@@ -549,7 +560,7 @@ export default class LiltExtension extends Extension {
         if (this._orbTimeline)
             return;
         this._orbBands = [0, 0, 0];
-        this._orbCommand = false;
+        this._orbVelocity = [0, 0, 0];
         this._orbCommandMix = 0;
         this._orbLoadingMix = this._state === 'recording' ? 0 : 1;
         this._orbStarted = GLib.get_monotonic_time();
@@ -562,23 +573,23 @@ export default class LiltExtension extends Extension {
             const dt = Math.min(0.1, (now - lastFrame) / 1000000);
             lastFrame = now;
             const command = this._orbCommandPreview ?? false;
-            if (command !== this._orbCommand) {
-                this._orbCommand = command;
-                this._wave.ease({scale_x: command ? 2.3 : 1, scale_y: command ? 2.3 : 1,
-                    duration: 280, mode: Clutter.AnimationMode.EASE_IN_OUT_CUBIC});
-            }
-            this._orbCommandMix += (Number(command) - this._orbCommandMix) * (1 - Math.exp(-dt / 0.075));
+            this._orbCommandMix += (Number(command) - this._orbCommandMix) * (1 - Math.exp(-dt / 0.12));
             if (Math.abs(Number(command) - this._orbCommandMix) < 0.002)
                 this._orbCommandMix = Number(command);
             const loading = this._state !== 'recording' && !this._autoCommand ? 1 : 0;
-            this._orbLoadingMix += (loading - this._orbLoadingMix) * (1 - Math.exp(-dt / 0.16));
+            this._orbLoadingMix += (loading - this._orbLoadingMix) * (1 - Math.exp(-dt / 0.28));
             const activity = voiceIntensity(this._proxy?.Level || 0);
             const bands = this._proxy?.Bands ?? [0, 0, 0];
             const peak = Math.max(0.001, ...bands);
             for (let i = 0; i < 3; i++) {
                 const target = activity * bands[i] / peak;
-                const response = target > this._orbBands[i] ? 0.05 : 0.16;
-                this._orbBands[i] += (target - this._orbBands[i]) * (1 - Math.exp(-dt / response));
+                // Exact critically damped spring: smooth velocity at any frame rate.
+                const offset = this._orbBands[i] - target;
+                const velocity = this._orbVelocity[i];
+                const decay = Math.exp(-14 * dt);
+                const impulse = velocity + 14 * offset;
+                this._orbBands[i] = target + (offset + impulse * dt) * decay;
+                this._orbVelocity[i] = (velocity - 14 * impulse * dt) * decay;
             }
             this._wave.queue_repaint();
         });
@@ -615,12 +626,13 @@ export default class LiltExtension extends Extension {
 
     _receivePartial(text, stableBytes) {
         if (!this._session || this._cancelled || this._autoCommand ||
-            !ACTIVE.has(this._state) || !this._target || this._pendingText !== null)
+            !ACTIVE.has(this._state) || this._pendingText !== null)
             return;
         this._orbCommandPreview = isBrowserCommandPreview(text) || startsBrowserCommand(text);
         const draft = this._orbCommandPreview ? '' : text;
         this._latestPartial = {text: draft, stableBytes: draft ? stableBytes : 0};
-        this._composition?.update(draft, draft ? stableBytes : 0);
+        if (this._showLive)
+            this._composition?.update(draft, draft ? stableBytes : 0);
         if (startsBrowserCommand(text)) {
             this._autoCommand = true;
             this._commandAnimating = true;
@@ -723,6 +735,12 @@ export default class LiltExtension extends Extension {
                 return;
             }
             if (!text) {
+                this._clearTarget();
+                return;
+            }
+            if (this._clipboardOnly) {
+                St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
+                Main.notify('lilt', 'Transcript copied to clipboard.');
                 this._clearTarget();
                 return;
             }
