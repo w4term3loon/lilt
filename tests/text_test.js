@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import {insertionText, compositionParts} from '../extension/text.js';
+import {insertionText, compositionParts, isBrowserCommand} from '../extension/text.js';
 
 function assert(condition, message) {
     if (!condition)
         throw new Error(message);
 }
+
+for (const text of ['open browser', 'Open browser.', ' OPEN   BROWSER! '])
+    assert(isBrowserCommand(text), 'Recognize the complete browser command');
+for (const text of ['', null, 'Please open browser', 'Do not open browser.', 'Open browser and search', '"open browser"'])
+    assert(!isBrowserCommand(text), 'Ordinary dictation must not launch an app');
 
 for (const [input, expected] of [
     ['  Hello\nworld.\r\n', 'Hello world.'],

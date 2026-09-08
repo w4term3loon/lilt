@@ -12,7 +12,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
-import {insertionText} from './text.js';
+import {insertionText, isBrowserCommand} from './text.js';
 import {Composition} from './composition.js';
 import {drawOrb, voiceIntensity} from './orb.js';
 
@@ -690,13 +690,14 @@ export default class LiltExtension extends Extension {
                 return;
             }
             const text = this._cancelled ? null : this._pendingText;
+            const openBrowser = isBrowserCommand(text);
             this._pendingText = null;
             this._inserting = true;
             this._stopWave();
             this._pill.hide();
             if (this._sessionLive) {
                 try {
-                    if (text && this._target && global.display.focus_window === this._target &&
+                    if (!openBrowser && text && this._target && global.display.focus_window === this._target &&
                         !Main.overview.visible && Main.modalCount === 0) {
                         if (!await this._composition.commit(text))
                             throw new Error('The transcript could not be inserted.');
@@ -713,12 +714,19 @@ export default class LiltExtension extends Extension {
                         this._session = false;
                         this._clearTarget();
                         this._bindShortcut();
+                        if (openBrowser && !this._cancelled)
+                            this._openBrowser();
                     }
                 }
                 return;
             }
             this._session = false;
             this._releaseGrab();
+            if (openBrowser) {
+                this._clearTarget();
+                this._openBrowser();
+                return;
+            }
             if (!text) {
                 this._clearTarget();
                 return;
@@ -730,6 +738,23 @@ export default class LiltExtension extends Extension {
             Main.activateWindow(this._target);
             this._later(120, () => this._insert(text, 0, generation));
         });
+    }
+
+    _openBrowser() {
+        if (!this._enabled || this._cancelled || Main.overview.visible || Main.modalCount > 0)
+            return;
+        try {
+            const info = Gio.AppInfo.get_default_for_type('x-scheme-handler/https', false);
+            if (!info)
+                throw new Error('Set a default browser in Ubuntu Settings.');
+            const app = Shell.AppSystem.get_default().lookup_app(info.get_id());
+            if (app)
+                app.activate();
+            else
+                info.launch([], global.create_app_launch_context(0, -1));
+        } catch (error) {
+            this._error(`Could not open the browser: ${error.message}`);
+        }
     }
 
     _insert(text, attempt, generation) {

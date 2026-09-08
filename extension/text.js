@@ -8,6 +8,10 @@ export function insertionText(text) {
         .trim();
 }
 
+export function isBrowserCommand(text) {
+    return /^open browser[.!?]*$/i.test(insertionText(text));
+}
+
 // stableBytes is a UTF-8 prefix length, not a JavaScript UTF-16 index. Keep
 // complete characters and sanitize controls without truncating composition.
 export function compositionParts(text, stableBytes) {
