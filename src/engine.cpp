@@ -134,7 +134,7 @@ public:
         {
             std::lock_guard<std::mutex> guard(mutex_);
             active_ = false;
-            deadline_ = Clock::now() + 60s;
+            deadline_ = Clock::now() + 5min;
         }
         changed_.notify_all();
     }
@@ -189,7 +189,7 @@ struct DecoderContext {
 };
 
 std::string decode_samples(DecoderContext& decoder, const std::vector<float>& samples,
-                            int threads, std::atomic<bool>* cancel) {
+                            int threads, std::atomic<bool>* cancel, const std::string& vocabulary) {
     if (interrupted(cancel)) return {};
 
     auto params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
@@ -198,6 +198,8 @@ std::string decode_samples(DecoderContext& decoder, const std::vector<float>& sa
     params.language = "en";
     params.translate = false;
     params.no_context = true;
+    params.initial_prompt = vocabulary.empty() ? nullptr : vocabulary.c_str();
+    params.carry_initial_prompt = !vocabulary.empty();
     params.no_timestamps = true;
     params.print_special = false;
     params.print_progress = false;
@@ -240,9 +242,11 @@ std::string decode_samples(DecoderContext& decoder, const std::vector<float>& sa
 class SessionDecoder {
 public:
     SessionDecoder(ModelCache& cache, std::size_t generation, std::string model_path, int threads,
-                   std::atomic<bool>& cancel, const Engine::Callbacks& callbacks, bool live_preview)
+                   std::atomic<bool>& cancel, const Engine::Callbacks& callbacks, bool live_preview,
+                   std::string vocabulary)
         : cache_(cache), generation_(generation), model_path_(std::move(model_path)), threads_(threads),
-          cancel_(cancel), on_partial_(callbacks.on_partial), preview_(live_preview && bool(on_partial_)) {}
+          cancel_(cancel), on_partial_(callbacks.on_partial), preview_(live_preview && bool(on_partial_)),
+          vocabulary_(std::move(vocabulary)) {}
 
     ~SessionDecoder() {
         finish();
@@ -264,7 +268,7 @@ public:
                     if (partial_stop_ || cancel_) break;
                     if (!audible(*samples)) continue;
                     next_decode = Clock::now() + 2s;
-                    auto text = decode_samples(*context, *samples, threads_, &partial_stop_);
+                    auto text = decode_samples(*context, *samples, threads_, &partial_stop_, vocabulary_);
                     if (partial_stop_ || cancel_) break;
                     const auto stable = detail::stable_word_prefix(previous, text);
                     previous = text;
@@ -303,6 +307,7 @@ private:
     std::atomic<bool>& cancel_;
     const std::function<void(std::string, std::size_t)> on_partial_;
     const bool preview_;
+    const std::string vocabulary_;
     std::atomic<bool> partial_stop_{false};
     detail::LatestValue<std::vector<float>> pending_;
     std::unique_ptr<DecoderContext> context_;
@@ -313,13 +318,22 @@ struct PulseCapture {
     pa_mainloop* loop = nullptr;
     pa_context* context = nullptr;
     pa_stream* stream = nullptr;
+    const Engine::Callbacks& callbacks;
+    std::string source_name, reported_name;
+    std::uint32_t source_index = PA_INVALID_INDEX;
+    bool source_muted = false, stream_muted = false, reported_muted = false;
+
+    explicit PulseCapture(const Engine::Callbacks& value) : callbacks(value) {}
 
     ~PulseCapture() {
         if (stream) {
+            pa_stream_set_moved_callback(stream, nullptr, nullptr);
             pa_stream_disconnect(stream);
             pa_stream_unref(stream);
+            stream = nullptr;
         }
         if (context) {
+            pa_context_set_subscribe_callback(context, nullptr, nullptr);
             pa_context_disconnect(context);
             pa_context_unref(context);
         }
@@ -334,12 +348,76 @@ struct PulseCapture {
         if (pa_mainloop_iterate(loop, 0, nullptr) < 0)
             throw error("Audio server stopped responding");
     }
+
+    void report_microphone() {
+        const bool muted = source_muted || stream_muted;
+        if (source_name.empty() || (source_name == reported_name && muted == reported_muted)) return;
+        reported_name = source_name;
+        reported_muted = muted;
+        notify(callbacks.on_microphone, source_name, muted);
+    }
+
+    void refresh_microphone() {
+        if (!stream || pa_stream_get_state(stream) != PA_STREAM_READY) return;
+        const auto index = pa_stream_get_device_index(stream);
+        if (index == PA_INVALID_INDEX) return;
+        if (source_index != index) {
+            source_index = index;
+            source_name.clear();
+            source_muted = false;
+        }
+        auto* operation = pa_context_get_source_info_by_index(context, index,
+            +[](pa_context*, const pa_source_info* info, int end, void* data) {
+                auto* self = static_cast<PulseCapture*>(data);
+                if (end || !info || !self->stream || info->index != pa_stream_get_device_index(self->stream)) return;
+                try {
+                    self->source_name = info->description ? info->description : info->name ? info->name : "Microphone";
+                    self->source_muted = info->mute || (pa_cvolume_valid(&info->volume) &&
+                        pa_cvolume_max(&info->volume) == PA_VOLUME_MUTED);
+                    self->report_microphone();
+                } catch (...) {} // Metadata must never interrupt audio capture.
+            }, this);
+        if (operation) pa_operation_unref(operation);
+        operation = pa_context_get_source_output_info(context, pa_stream_get_index(stream),
+            +[](pa_context*, const pa_source_output_info* info, int end, void* data) {
+                auto* self = static_cast<PulseCapture*>(data);
+                if (end || !info || !self->stream || info->index != pa_stream_get_index(self->stream) ||
+                    info->source != pa_stream_get_device_index(self->stream)) return;
+                try {
+                    self->stream_muted = info->mute || (info->has_volume && pa_cvolume_valid(&info->volume) &&
+                        pa_cvolume_max(&info->volume) == PA_VOLUME_MUTED);
+                    self->report_microphone();
+                } catch (...) {}
+            }, this);
+        if (operation) pa_operation_unref(operation);
+    }
+
+    void watch_microphone() {
+        if (!callbacks.on_microphone) return;
+        pa_stream_set_moved_callback(stream, +[](pa_stream*, void* data) {
+            static_cast<PulseCapture*>(data)->refresh_microphone();
+        }, this);
+        pa_context_set_subscribe_callback(context,
+            +[](pa_context*, pa_subscription_event_type_t event, std::uint32_t index, void* data) {
+                auto* self = static_cast<PulseCapture*>(data);
+                if (!self->stream || pa_stream_get_state(self->stream) != PA_STREAM_READY) return;
+                const auto facility = event & PA_SUBSCRIPTION_EVENT_FACILITY_MASK;
+                if ((facility == PA_SUBSCRIPTION_EVENT_SOURCE && index == pa_stream_get_device_index(self->stream)) ||
+                    (facility == PA_SUBSCRIPTION_EVENT_SOURCE_OUTPUT && index == pa_stream_get_index(self->stream)))
+                    self->refresh_microphone();
+            }, this);
+        auto* operation = pa_context_subscribe(context,
+            static_cast<pa_subscription_mask_t>(PA_SUBSCRIPTION_MASK_SOURCE | PA_SUBSCRIPTION_MASK_SOURCE_OUTPUT),
+            nullptr, nullptr);
+        if (operation) pa_operation_unref(operation);
+        refresh_microphone();
+    }
 };
 
 std::vector<float> capture_audio(std::atomic<bool>& stop, std::atomic<bool>& cancel,
                                  const Engine::Callbacks& callbacks,
                                  SessionDecoder& decoder) {
-    PulseCapture pulse;
+    PulseCapture pulse(callbacks);
     pulse.loop = pa_mainloop_new();
     if (!pulse.loop) throw std::runtime_error("Cannot create the audio connection.");
     pulse.context = pa_context_new(pa_mainloop_get_api(pulse.loop), "ren");
@@ -381,6 +459,7 @@ std::vector<float> capture_audio(std::atomic<bool>& stop, std::atomic<bool>& can
     std::vector<float> samples;
     samples.reserve(sample_rate * 10);
     notify(callbacks.on_state, "recording", "Listening");
+    pulse.watch_microphone();
     // Start initialization only once the microphone is ready. It runs on a
     // separate thread, so reading audio never waits for the model to load.
     if (stop || cancel) return samples;
@@ -551,14 +630,14 @@ struct Engine::Impl {
     }
 
     void run(const std::string& model_path, int threads, const Callbacks& callbacks,
-             bool live_preview) noexcept {
+             bool live_preview, const std::string& vocabulary) noexcept {
         std::string terminal_state = "idle";
         std::string message;
         try {
             if (!std::ifstream(model_path, std::ios::binary))
                 throw std::runtime_error("Choose a downloaded whisper.cpp model in Settings before recording.");
             SessionDecoder decoder(cache, model_generation, model_path, threads,
-                                   cancel_requested, callbacks, live_preview);
+                                   cancel_requested, callbacks, live_preview, vocabulary);
             auto samples = capture_audio(stop_requested, cancel_requested, callbacks, decoder);
             decoder.finish();
             if (!cancel_requested && audible(samples)) {
@@ -567,7 +646,7 @@ struct Engine::Impl {
                 if (!context) throw std::runtime_error("The transcription model was not initialized.");
                 // take_context() joins the partial worker before final decoding.
                 // begin() excludes any other recording/replay on these weights.
-                auto text = decode_samples(*context, samples, threads, &cancel_requested);
+                auto text = decode_samples(*context, samples, threads, &cancel_requested, vocabulary);
                 if (!cancel_requested && !text.empty()) notify(callbacks.on_result, std::move(text));
                 else if (!cancel_requested) message = "No speech detected";
             } else if (!cancel_requested) {
@@ -591,7 +670,8 @@ struct Engine::Impl {
     }
 
     template<class ReadAudio>
-    std::string replay(const std::string& model_path, int threads, ReadAudio read_audio) {
+    std::string replay(const std::string& model_path, int threads, ReadAudio read_audio,
+                       const std::string& vocabulary) {
         {
             std::lock_guard<std::mutex> guard(lifecycle);
             if (!begin(model_path)) throw std::runtime_error("A transcription session is already active.");
@@ -606,7 +686,7 @@ struct Engine::Impl {
                     auto model = cache.acquire(model_path, model_generation);
                     if (!cancel_requested) {
                         DecoderContext context(std::move(model));
-                        text = decode_samples(context, samples, threads, &cancel_requested);
+                        text = decode_samples(context, samples, threads, &cancel_requested, vocabulary);
                     }
                 }
             }
@@ -628,12 +708,13 @@ Engine::Engine() : impl_(std::make_unique<Impl>()) {}
 Engine::~Engine() = default;
 
 bool Engine::start(const std::string& model_path, int threads, Callbacks callbacks,
-                   bool live_preview) {
+                   bool live_preview, std::string vocabulary) {
     std::lock_guard<std::mutex> guard(impl_->lifecycle);
     if (!impl_->begin(model_path)) return false;
     try {
-        impl_->worker = std::thread([this, model_path, threads, callbacks = std::move(callbacks), live_preview] {
-            impl_->run(model_path, threads, callbacks, live_preview);
+        impl_->worker = std::thread([this, model_path, threads, callbacks = std::move(callbacks), live_preview,
+                                    vocabulary = normalize_vocabulary(vocabulary)] {
+            impl_->run(model_path, threads, callbacks, live_preview, vocabulary);
         });
     } catch (...) {
         impl_->cache.idle();
@@ -652,15 +733,16 @@ bool Engine::busy() const noexcept { return impl_->running; }
 void Engine::release_model() { impl_->cache.clear(); }
 
 std::string Engine::transcribe(const std::string& model_path, const std::vector<float>& samples,
-                               int threads) {
+                               int threads, std::string vocabulary) {
     return impl_->replay(model_path, threads, [&samples]() -> const std::vector<float>& {
         return samples;
-    });
+    }, normalize_vocabulary(vocabulary));
 }
 
 std::string Engine::transcribe_file(const std::string& model_path, const std::string& wav_path,
-                                    int threads) {
-    return impl_->replay(model_path, threads, [&wav_path] { return read_wav(wav_path); });
+                                    int threads, std::string vocabulary) {
+    return impl_->replay(model_path, threads, [&wav_path] { return read_wav(wav_path); },
+                         normalize_vocabulary(vocabulary));
 }
 
 } // namespace ren

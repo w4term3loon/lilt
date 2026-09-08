@@ -12,9 +12,13 @@ The command stays out of the text field; the particles expand in purple, then di
 Live recognition runs with Live text off too; that switch only hides inline drafts.
 
 The cloud stays in the bottom-right corner, clear of panels and docks. Click it to finish.
+**Copy last dictation** in the tray recovers the last completed text until the next
+recording or Quit. Microphone warnings offer **Open Sound Settings** when input is
+muted or very quiet.
 
 Audio stays in memory. No cloud transcription or recording history.
 Models download once, then work offline. Recordings are limited to three minutes.
+Model weights stay ready for five minutes after use, then leave memory.
 
 ## Install
 
@@ -44,6 +48,8 @@ from [ggerganov](https://huggingface.co/ggerganov/whisper.cpp) and are checksum 
 Choose Base for speed or Small for accuracy. **Model details** shows the file size and source.
 Choose **Custom file…** to use a local whisper.cpp GGML model; compatibility is checked
 when loaded. Custom files stay in their original location.
+The optional **Vocabulary** field adds local recognition hints for names and terms
+(up to 512 characters). Hints can improve spelling; they do not train the model.
 
 The cloud listens, the ring processes, and purple expansion recognizes a command.
 On completion, the ring gathers into one dot and fades. Clipboard output also shows a notification.

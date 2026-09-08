@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "app.hpp"
 #include "migration.hpp"
+#include "text.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <functional>
@@ -50,12 +51,14 @@ constexpr struct { const char* id; const char* title; guint64 bytes; } kModels[]
 constexpr auto kXml = R"(<node><interface name="io.github.ren.Dictation">
 <method name="Toggle"/><method name="Stop"/><method name="Cancel"/>
 <method name="ShowPreferences"/><method name="Quit"/><method name="Attach"/><method name="Detach"/>
+<method name="GetLastTranscript"><arg type="s" direction="out" name="text"/></method>
 <method name="ReportError"><arg type="s" direction="in" name="message"/></method>
 <property name="State" type="s" access="read"/><property name="Level" type="d" access="read"/>
 <property name="Bands" type="ad" access="read"/>
 <property name="Message" type="s" access="read"/><property name="Shortcut" type="s" access="read"/>
 <property name="FinishShortcut" type="s" access="read"/>
 <property name="LivePreview" type="b" access="read"/>
+<property name="HasTranscript" type="b" access="read"/><property name="InputWarning" type="s" access="read"/>
 <signal name="PartialTranscript"><arg type="s" name="text"/><arg type="u" name="stable_bytes"/></signal>
 <signal name="Transcript"><arg type="s" name="text"/></signal>
 </interface></node>)";
@@ -216,6 +219,10 @@ void App::toggle() {
     const auto generation = ++generation_;
     const auto owner = shell_owner_;
     last_transcript_.clear();
+    input_warning_.clear();
+    microphone_name_.clear();
+    microphone_muted_ = heard_input_ = false;
+    quiet_levels_ = 0;
     if (window_) gtk_widget_hide(window_);
     Engine::Callbacks cb;
     cb.on_state = [this, generation](std::string state, std::string message) {
@@ -224,8 +231,22 @@ void App::toggle() {
     cb.on_level = [this, generation](double level, std::array<double, 3> bands) {
         dispatch([this, generation, level, bands] {
             if (generation == generation_ && state_ == "recording") {
+                if (level >= 0.001) heard_input_ = true;
+                else if (quiet_levels_ < 60) ++quiet_levels_;
+                if (update_input_warning()) refresh();
                 level_ = level; bands_ = bands; publish();
             }
+        });
+    };
+    cb.on_microphone = [this, generation](std::string name, bool muted) {
+        dispatch([this, generation, name = std::move(name), muted] {
+            if (generation != generation_) return;
+            if ((!microphone_name_.empty() && microphone_name_ != name) || microphone_muted_ != muted) {
+                heard_input_ = false; quiet_levels_ = 0;
+            }
+            microphone_name_ = name;
+            microphone_muted_ = muted;
+            if (update_input_warning()) { refresh(); publish(); }
         });
     };
     cb.on_partial = [this, generation, owner](std::string text, std::size_t stable_bytes) {
@@ -240,7 +261,8 @@ void App::toggle() {
     cb.on_result = [this, generation, owner](std::string text) {
         dispatch([this, generation, owner, text] {
             if (generation != generation_ || shell_owner_ != owner || owner.empty()) return;
-            last_transcript_ = text;
+            if (!g_regex_match_simple("^open browser(?:[\\s.!?,]|$)", text.c_str(), G_REGEX_CASELESS, G_REGEX_MATCH_DEFAULT))
+                last_transcript_ = text;
             if (!text.empty()) g_dbus_connection_emit_signal(bus_, owner.c_str(),
                 kPath, kInterface, "Transcript", g_variant_new("(s)", text.c_str()), nullptr);
         });
@@ -248,18 +270,31 @@ void App::toggle() {
     set_state("loading", "Opening microphone…");
     try {
         engine_.start(model_path(), std::max(1u, std::min(4u, std::thread::hardware_concurrency())),
-                      std::move(cb), true);
+                      std::move(cb), true, vocabulary_);
     } catch (const std::exception& error) { set_state("error", error.what()); }
 }
 
-void App::cancel_session() {
+void App::cancel_session(bool discard_transcript) {
     ++generation_;
     engine_.cancel();
+    if (discard_transcript) last_transcript_.clear();
+    input_warning_.clear();
     set_state("idle", "Cancelled");
+}
+
+bool App::update_input_warning() {
+    if (state_ != "recording") return false;
+    const auto name = microphone_name_.empty() ? "Microphone" : microphone_name_;
+    const auto warning = microphone_muted_ ? name + " is muted." :
+        !heard_input_ && quiet_levels_ >= 60 ? "Very little sound from " + name + "." : "";
+    if (warning == input_warning_) return false;
+    input_warning_ = warning;
+    return true;
 }
 
 void App::set_state(const std::string& state, const std::string& message) {
     state_ = state; message_ = message;
+    update_input_warning();
     if (state != "recording") { level_ = 0; bands_ = {}; }
     publish(); refresh();
 }
@@ -275,6 +310,8 @@ void App::publish() {
     g_variant_builder_add(&changed, "{sv}", "Shortcut", g_variant_new_string(shortcut_.c_str()));
     g_variant_builder_add(&changed, "{sv}", "FinishShortcut", g_variant_new_string(finish_shortcut_.c_str()));
     g_variant_builder_add(&changed, "{sv}", "LivePreview", g_variant_new_boolean(live_preview_));
+    g_variant_builder_add(&changed, "{sv}", "HasTranscript", g_variant_new_boolean(!last_transcript_.empty()));
+    g_variant_builder_add(&changed, "{sv}", "InputWarning", g_variant_new_string(input_warning_.c_str()));
     g_variant_builder_init(&invalidated, G_VARIANT_TYPE("as"));
     g_dbus_connection_emit_signal(bus_, nullptr, kPath, "org.freedesktop.DBus.Properties", "PropertiesChanged",
         g_variant_new("(sa{sv}as)", kInterface, &changed, &invalidated), nullptr);
@@ -286,6 +323,8 @@ GVariant* App::get_property(GDBusConnection*, const gchar*, const gchar*, const 
     if (g_str_equal(property, "Shortcut")) return g_variant_new_string(self->shortcut_.c_str());
     if (g_str_equal(property, "FinishShortcut")) return g_variant_new_string(self->finish_shortcut_.c_str());
     if (g_str_equal(property, "LivePreview")) return g_variant_new_boolean(self->live_preview_);
+    if (g_str_equal(property, "HasTranscript")) return g_variant_new_boolean(!self->last_transcript_.empty());
+    if (g_str_equal(property, "InputWarning")) return g_variant_new_string(self->input_warning_.c_str());
     if (g_str_equal(property, "Level")) return g_variant_new_double(self->level_);
     if (g_str_equal(property, "Bands"))
         return g_variant_new_fixed_array(G_VARIANT_TYPE_DOUBLE, self->bands_.data(), self->bands_.size(), sizeof(double));
@@ -309,8 +348,16 @@ void App::method_call(GDBusConnection*, const gchar* sender, const gchar*, const
     } else if (g_str_equal(method, "ReportError")) {
         if (self->shell_owner_ == sender) {
             const char* message; g_variant_get(args, "(&s)", &message);
-            self->cancel_session(); self->set_state("error", message); self->show();
+            self->cancel_session(false); self->set_state("error", message); self->show();
         }
+    } else if (g_str_equal(method, "GetLastTranscript")) {
+        if (self->shell_owner_ != sender) {
+            g_dbus_method_invocation_return_dbus_error(invocation, "io.github.ren.Error", "Only the attached shell can copy dictation.");
+            return;
+        }
+        g_dbus_method_invocation_return_value(invocation,
+            g_variant_new("(s)", self->engine_.busy() ? "" : self->last_transcript_.c_str()));
+        return;
     } else if (g_str_equal(method, "Toggle")) self->toggle();
     else if (g_str_equal(method, "Stop")) self->engine_.stop();
     else if (g_str_equal(method, "Cancel")) self->cancel_session();
@@ -334,6 +381,7 @@ void App::load_config() {
         read("custom_model", custom_model_); read("model", model_); read("shortcut", shortcut_);
         migrate = std::string(group) != "ren" || take(g_key_file_get_string(file, group, "language", nullptr)) != "en";
         read("finish_shortcut", finish_shortcut_);
+        read("vocabulary", vocabulary_);
         if (g_key_file_has_key(file, group, "live_preview", nullptr)) {
             GError* error = nullptr;
             const bool value = g_key_file_get_boolean(file, group, "live_preview", &error);
@@ -342,6 +390,7 @@ void App::load_config() {
         }
     }
     const auto previous_model = model_;
+    vocabulary_ = normalize_vocabulary(vocabulary_);
     const std::string legacy[] = {"tiny-q5_1", "base-q5_1", "small-q5_1", "medium-q5_0"};
     if (std::find(std::begin(legacy), std::end(legacy), model_) != std::end(legacy))
         model_.insert(model_.find('-'), ".en");
@@ -359,6 +408,7 @@ void App::save_config() {
     g_key_file_set_string(file, "ren", "shortcut", shortcut_.c_str());
     g_key_file_set_string(file, "ren", "finish_shortcut", finish_shortcut_.c_str());
     g_key_file_set_boolean(file, "ren", "live_preview", live_preview_);
+    g_key_file_set_string(file, "ren", "vocabulary", vocabulary_.c_str());
     GError* error = nullptr;
     if (!g_key_file_save_to_file(file, config_path_.c_str(), &error)) {
         set_state("error", error->message); g_clear_error(&error);
@@ -453,11 +503,35 @@ void App::build_ui() {
     auto* preview_control = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_box_pack_start(GTK_BOX(preview_control), preview_switch_, TRUE, TRUE, 0);
     row("Live text", preview_control, 3);
+    vocabulary_entry_ = gtk_entry_new();
+    gtk_entry_set_max_length(GTK_ENTRY(vocabulary_entry_), 512);
+    gtk_entry_set_width_chars(GTK_ENTRY(vocabulary_entry_), 14);
+    gtk_entry_set_alignment(GTK_ENTRY(vocabulary_entry_), 0.5);
+    gtk_entry_set_placeholder_text(GTK_ENTRY(vocabulary_entry_), "Names, terms…");
+    gtk_entry_set_text(GTK_ENTRY(vocabulary_entry_), vocabulary_.c_str());
+    gtk_widget_set_tooltip_text(vocabulary_entry_, "Optional words to help recognition. Stored locally.");
+    row("Vocabulary", vocabulary_entry_, 4);
     pack(box, status_label_);
+    sound_settings_ = gtk_button_new_with_label("Open Sound Settings");
+    gtk_widget_set_halign(sound_settings_, GTK_ALIGN_CENTER);
+    gtk_widget_set_no_show_all(sound_settings_, TRUE);
+    pack(box, sound_settings_);
+    g_signal_connect(sound_settings_, "clicked", G_CALLBACK(+[](GtkButton*, gpointer d) {
+        GError* error = nullptr;
+        auto* info = g_app_info_create_from_commandline("gnome-control-center sound", "Sound Settings", G_APP_INFO_CREATE_NONE, &error);
+        if (info) { g_app_info_launch(info, nullptr, nullptr, &error); g_object_unref(info); }
+        if (error) { static_cast<App*>(d)->set_state("error", error->message); g_clear_error(&error); }
+    }), this);
     recovery_ = label(""); gtk_label_set_selectable(GTK_LABEL(recovery_), TRUE);
     gtk_widget_set_no_show_all(recovery_, TRUE); pack(box, recovery_);
     g_signal_connect(shortcut_button_, "clicked", G_CALLBACK(+[](GtkButton*, gpointer d) { static_cast<App*>(d)->edit_shortcut(); }), this);
     g_signal_connect(finish_button_, "clicked", G_CALLBACK(+[](GtkButton*, gpointer d) { static_cast<App*>(d)->edit_shortcut(true); }), this);
+    g_signal_connect(vocabulary_entry_, "changed", G_CALLBACK(+[](GtkEditable* widget, gpointer d) {
+        auto* self = static_cast<App*>(d); if (self->building_ui_) return;
+        const auto vocabulary = normalize_vocabulary(gtk_entry_get_text(GTK_ENTRY(widget)));
+        if (vocabulary == self->vocabulary_) return;
+        self->vocabulary_ = vocabulary; self->save_config();
+    }), this);
     g_signal_connect(preview_switch_, "notify::active", G_CALLBACK(+[](GObject* w, GParamSpec*, gpointer d) {
         auto* self = static_cast<App*>(d); if (self->building_ui_) return;
         self->live_preview_ = gtk_switch_get_active(GTK_SWITCH(w));
@@ -481,8 +555,10 @@ void App::refresh() {
     std::string status;
     if (!download_ && state_ == "error") status = message_;
     else if (shell_owner_.empty()) status = "Enable ren in Extensions, then log out and back in.";
+    else if (!input_warning_.empty()) status = input_warning_;
     gtk_label_set_text(GTK_LABEL(status_label_), status.c_str());
     gtk_widget_set_visible(status_label_, !status.empty());
+    gtk_widget_set_visible(sound_settings_, !input_warning_.empty());
     gtk_button_set_label(GTK_BUTTON(download_button_), download_ ? "Downloading…" : exists ? "Model installed" : "Download model");
     gtk_widget_set_sensitive(download_button_, !download_ && (!exists || state_ == "error") && !engine_.busy());
     gtk_widget_set_visible(download_button_, model_ != "custom" && (!exists || download_ || state_ == "error"));
@@ -492,6 +568,7 @@ void App::refresh() {
     gtk_widget_set_sensitive(shortcut_button_, !engine_.busy());
     gtk_widget_set_sensitive(finish_button_, !engine_.busy());
     gtk_widget_set_sensitive(preview_switch_, !engine_.busy());
+    gtk_widget_set_sensitive(vocabulary_entry_, !engine_.busy());
     gtk_button_set_label(GTK_BUTTON(shortcut_button_), shortcut_label(shortcut_).c_str());
     gtk_button_set_label(GTK_BUTTON(finish_button_), shortcut_label(finish_shortcut_).c_str());
     gtk_label_set_text(GTK_LABEL(recovery_), last_transcript_.c_str());

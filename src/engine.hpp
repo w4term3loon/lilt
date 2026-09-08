@@ -10,16 +10,18 @@
 
 namespace ren {
 
-// State, level, and final-result callbacks run on the capture worker; partial
+// State, microphone, level, and final-result callbacks run on the capture worker; partial
 // callbacks run on a separate decoder worker and may run concurrently with
 // them. Marshal GUI changes to the main loop. Do not destroy the engine from a
 // callback. Idle owns no microphone, recording, transcript, or decoder state;
-// only the selected model's weights remain warm for up to 60 seconds.
+// only the selected model's weights remain warm for up to five minutes.
 class Engine {
 public:
     struct Callbacks {
         std::function<void(std::string, std::string)> on_state;
         std::function<void(double, std::array<double, 3>)> on_level; // RMS and low/mid/high bands.
+        // Actual active source, including device/stream mute or zero input volume.
+        std::function<void(std::string, bool)> on_microphone;
         std::function<void(std::string)> on_result;
         // UTF-8 text plus the byte length of a complete-word prefix shared by
         // the previous hypothesis. It can shrink after a correction and is
@@ -38,8 +40,9 @@ public:
     // initialization can take longer because Whisper has no abort hook there.
     // Optional previews re-decode growing audio snapshots at most every two
     // seconds, coalescing pending work. This is not a native streaming model.
+    // Optional vocabulary is a bounded, single-line list of recognition hints.
     bool start(const std::string& model_path, int threads, Callbacks callbacks,
-               bool live_preview = false);
+               bool live_preview = false, std::string vocabulary = {});
     void stop();
     void cancel();
     bool busy() const noexcept;
@@ -54,9 +57,9 @@ public:
     // replace it for another model, reject overlap, and obey cancel(). Each call
     // discards its decoder state. Destruction/release_model() drop idle weights.
     std::string transcribe(const std::string& model_path, const std::vector<float>& samples,
-                           int threads = 0);
+                           int threads = 0, std::string vocabulary = {});
     std::string transcribe_file(const std::string& model_path, const std::string& wav_path,
-                                int threads = 0);
+                                int threads = 0, std::string vocabulary = {});
 
 private:
     struct Impl;

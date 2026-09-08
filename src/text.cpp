@@ -67,4 +67,17 @@ std::string normalize_dictation(std::string_view text) {
     return result;
 }
 
+std::string normalize_vocabulary(std::string_view text) {
+    auto result = normalize_dictation(text.substr(0, 4096));
+    std::size_t characters = 0;
+    for (std::size_t i = 0; i < result.size(); ++i) {
+        if ((static_cast<unsigned char>(result[i]) & 0xc0) != 0x80 && ++characters > 512) {
+            result.resize(i);
+            break;
+        }
+    }
+    while (!result.empty() && result.back() == ' ') result.pop_back();
+    return result;
+}
+
 } // namespace ren

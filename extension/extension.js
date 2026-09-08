@@ -9,6 +9,7 @@ import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
@@ -22,6 +23,7 @@ const BUS_XML = `<node><interface name="${BUS_NAME}">
     <method name="Attach"/><method name="Detach"/>
     <method name="Toggle"/><method name="Stop"/><method name="Cancel"/>
     <method name="ShowPreferences"/><method name="Quit"/>
+    <method name="GetLastTranscript"><arg type="s" direction="out" name="text"/></method>
     <method name="ReportError"><arg type="s" direction="in" name="message"/></method>
     <property name="State" type="s" access="read"/>
     <property name="Level" type="d" access="read"/>
@@ -30,6 +32,8 @@ const BUS_XML = `<node><interface name="${BUS_NAME}">
     <property name="Shortcut" type="s" access="read"/>
     <property name="FinishShortcut" type="s" access="read"/>
     <property name="LivePreview" type="b" access="read"/>
+    <property name="HasTranscript" type="b" access="read"/>
+    <property name="InputWarning" type="s" access="read"/>
     <signal name="Transcript"><arg type="s" name="text"/></signal>
     <signal name="PartialTranscript"><arg type="s" name="text"/><arg type="u" name="stable_bytes"/></signal>
 </interface></node>`;
@@ -118,6 +122,9 @@ export default class RenExtension extends Extension {
         this._finishScheduled = false;
         this._finishWaiting = false;
         this._releaseRetry = false;
+        this._copyRequest = null;
+        this._inputWarning = '';
+        this._inputNotification = null;
         this._sources = new Set();
         this._heldKeys = new Set();
         this._settings = this.getSettings();
@@ -166,6 +173,8 @@ export default class RenExtension extends Extension {
         this._feedbackFrame = null;
         this._enableGeneration++;
         this._generation++;
+        this._copyRequest = null;
+        this._clearInputWarning();
         this._cancellable.cancel();
         this._cancellable = null;
         this._attached = false;
@@ -228,6 +237,12 @@ export default class RenExtension extends Extension {
         });
         this._indicator.add_child(this._panelIcon);
         this._recordItem = this._indicator.menu.addAction('Start dictation', () => this._toggle());
+        this._copyItem = this._indicator.menu.addAction('Copy last dictation', () => this._copyLastTranscript());
+        this._copyItem.hide();
+        this._indicator.menu.connect('open-state-changed', (_menu, open) => {
+            if (open)
+                this._syncCopyItem();
+        });
         this._indicator.menu.addAction('Preferences', () => this._call('ShowPreferences'));
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._indicator.menu.addAction('Quit', () => this._call('Quit'));
@@ -292,6 +307,9 @@ export default class RenExtension extends Extension {
 
     _ownerChanged() {
         this._attached = false;
+        this._copyRequest = null;
+        this._clearInputWarning();
+        this._syncCopyItem();
         if (!this._proxy.g_name_owner) {
             this._awaitingNativeStart = false;
             this._state = 'idle';
@@ -518,6 +536,7 @@ export default class RenExtension extends Extension {
     _sync() {
         if (!this._enabled || !this._proxy.g_name_owner)
             return;
+        this._syncInputWarning();
         const shortcut = this._proxy.Shortcut;
         if (shortcut && this._settings.get_strv('toggle-shortcut')[0] !== shortcut)
             this._settings.set_strv('toggle-shortcut', [shortcut]);
@@ -559,6 +578,7 @@ export default class RenExtension extends Extension {
             (this._commandAnimating && !this._cancelled) || Boolean(this._feedback);
         this._recordItem.label.text = recording ? 'Finish dictation' : 'Start dictation';
         this._recordItem.setSensitive(!active || recording);
+        this._syncCopyItem();
         this._panelIcon[recording ? 'add_style_class_name' : 'remove_style_class_name']('ren-panel-recording');
         this._pill.accessible_name = recording ? 'Recording. Click to finish dictation.' :
             this._state === 'loading' ? 'Starting dictation. Escape to cancel.' :
@@ -828,6 +848,90 @@ export default class RenExtension extends Extension {
                 info.launch([], global.create_app_launch_context(0, -1));
         } catch (error) {
             this._error(`Could not open the browser: ${error.message}`);
+        }
+    }
+
+    _canCopyTranscript() {
+        return this._enabled && this._attached && this._proxy?.g_name_owner &&
+            this._proxy.HasTranscript && !ACTIVE.has(this._state) && !this._session && !this._inserting;
+    }
+
+    _syncCopyItem() {
+        this._copyItem.visible = Boolean(this._canCopyTranscript());
+        this._copyItem.setSensitive(!this._copyRequest);
+    }
+
+    _copyLastTranscript() {
+        if (!this._canCopyTranscript() || this._copyRequest)
+            return;
+        const request = this._copyRequest = {
+            proxy: this._proxy,
+            owner: this._proxy.g_name_owner,
+            generation: this._generation,
+            enableGeneration: this._enableGeneration,
+        };
+        this._syncCopyItem();
+        const current = () => this._copyRequest === request && this._canCopyTranscript() &&
+            this._proxy === request.proxy && this._proxy.g_name_owner === request.owner &&
+            this._generation === request.generation && this._enableGeneration === request.enableGeneration;
+        request.proxy.call('GetLastTranscript', null, Gio.DBusCallFlags.NO_AUTO_START, 5000,
+            this._cancellable, (proxy, result) => {
+                try {
+                    const [text] = proxy.call_finish(result).deep_unpack();
+                    if (current() && text && !isBrowserCommand(text)) {
+                        St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
+                        Main.notify('Ren', 'Last dictation copied to clipboard.');
+                    }
+                } catch (error) {
+                    if (current())
+                        this._error(`Could not copy the last dictation: ${error.message}`);
+                } finally {
+                    if (this._copyRequest === request) {
+                        this._copyRequest = null;
+                        if (this._enabled)
+                            this._syncCopyItem();
+                    }
+                }
+            });
+    }
+
+    _clearInputWarning() {
+        this._inputWarning = '';
+        this._inputNotification?.destroy();
+        this._inputNotification = null;
+    }
+
+    _syncInputWarning() {
+        const warning = this._proxy.InputWarning || '';
+        if (warning === this._inputWarning)
+            return;
+        this._clearInputWarning();
+        this._inputWarning = warning;
+        if (!warning)
+            return;
+        const notification = new MessageTray.Notification({
+            source: MessageTray.getSystemSource(), title: 'Ren', body: warning,
+        });
+        notification.addAction('Open Sound Settings', () => {
+            if (this._enabled)
+                this._openSoundSettings();
+        });
+        notification.connect('destroy', () => {
+            if (this._inputNotification === notification)
+                this._inputNotification = null;
+        });
+        this._inputNotification = notification;
+        notification.source.addNotification(notification);
+    }
+
+    _openSoundSettings() {
+        try {
+            const info = Gio.DesktopAppInfo.new('gnome-sound-panel.desktop') ??
+                Gio.AppInfo.create_from_commandline('gnome-control-center sound',
+                    'Sound Settings', Gio.AppInfoCreateFlags.NONE);
+            info.launch([], global.create_app_launch_context(0, -1));
+        } catch (error) {
+            this._error(`Could not open Sound Settings: ${error.message}`);
         }
     }
 

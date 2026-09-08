@@ -121,6 +121,13 @@ void text_tests() {
     controls += 'b';
     expect(normalize_dictation(controls) == "a b", "Every ASCII control must be removed");
     expect(normalize_dictation("\r\n\t\033\177").empty(), "Controls alone are empty");
+    expect(ren::normalize_vocabulary("  Codex,\nRen,\tGitHub  ") == "Codex, Ren, GitHub",
+           "Vocabulary remains a plain single-line hint");
+    const std::string prefix(511, 'a');
+    expect(ren::normalize_vocabulary(prefix + u8"🦉tail") == prefix + u8"🦉",
+           "Vocabulary limit preserves the last complete Unicode character");
+    expect(ren::normalize_vocabulary(std::string("Ren\0Codex", 9)) == "Ren Codex",
+           "An embedded NUL cannot hide vocabulary from the decoder");
 }
 
 void preview_tests() {
@@ -163,6 +170,8 @@ void audio_tests(const std::filesystem::path& directory) {
     const auto missing = (directory / "missing.bin").string();
     expect(engine.transcribe(missing, {}).empty(), "Empty audio skips the model");
     expect(engine.transcribe(missing, std::vector<float>(32000, 0)).empty(), "Silence skips the model");
+    expect(engine.transcribe(missing, std::vector<float>(32000, 0), 0, "Codex, Ren").empty(),
+           "Vocabulary alone cannot produce dictation from silence");
     expect(engine.transcribe(missing, std::vector<float>(32000, 0.00001f)).empty(), "Near-silence skips the model");
     expect(engine.transcribe(missing, std::vector<float>(100, 0.2f)).empty(), "Click-length audio is rejected");
     expect_error([&] { engine.transcribe(missing, std::vector<float>(3200, 0.2f)); },

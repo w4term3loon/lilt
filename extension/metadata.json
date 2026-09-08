@@ -5,6 +5,6 @@
   "url": "https://github.com/w4term3loon/ren",
   "shell-version": ["46"],
   "settings-schema": "org.gnome.shell.extensions.ren",
-  "version": 29,
+  "version": 30,
   "version-name": "0.6.0"
 }
