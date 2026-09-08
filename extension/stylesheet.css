@@ -6,13 +6,13 @@
 }
 /* Keep cached GNOME modules visible until the next login. */
 .lilt-wave { spacing: 2px; height: 23px; }
-.lilt-wave-bar { width: 3px; color: #82cbb8; }
+.lilt-wave-bar { width: 3px; color: #ff8b3d; }
 .lilt-dots { spacing: 5px; height: 23px; }
 .lilt-dot {
     width: 5px;
     height: 5px;
     border-radius: 3px;
-    background-color: #82cbb8;
-    border: 1px solid rgba(30, 72, 64, 0.25);
+    background-color: #ff8b3d;
+    border: 1px solid rgba(110, 48, 14, 0.25);
 }
 .lilt-panel-recording { color: #ff726a; }

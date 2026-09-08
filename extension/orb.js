@@ -1,64 +1,77 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-let seed = 73;
-function random() {
-    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-    return seed / 4294967296;
+import Cairo from 'cairo';
+
+function random(index) {
+    let value = Math.imul(index ^ 73, 1597334677);
+    value = Math.imul(value ^ (value >>> 16), 2246822507);
+    return ((value ^ (value >>> 16)) >>> 0) / 4294967296;
 }
-const points = Array.from({length: 96}, (_, index) => {
-    const y = random() * 2 - 1;
-    const angle = random() * Math.PI * 2;
-    const radius = (12 + random() * 7) * Math.sqrt(1 - y * y);
-    return {x: radius * Math.cos(angle), y: y * (12 + random() * 7),
-        z: radius * Math.sin(angle), phase: random() * Math.PI * 2,
-        size: 0.65 + random() * 0.55, band: index % 3};
-});
+
+// Smooth seeded noise: nearby moments share a flow instead of flickering.
+function noise(time) {
+    const step = Math.floor(time);
+    const fraction = time - step;
+    const blend = fraction * fraction * (3 - 2 * fraction);
+    return 2 * (random(step) * (1 - blend) + random(step + 1) * blend) - 1;
+}
+
+const clusters = Array.from({length: 6}, (_, i) => ({
+    x: (random(i * 4) - 0.5) * 17,
+    y: (random(i * 4 + 1) - 0.5) * 17,
+    phase: random(i * 4 + 2) * 100,
+}));
+const wisps = Array.from({length: 36}, (_, i) => ({
+    cluster: i % clusters.length,
+    x: (random(100 + i * 4) - 0.5) * 10,
+    y: (random(101 + i * 4) - 0.5) * 10,
+    size: 5 + random(102 + i * 4) * 4,
+    phase: random(103 + i * 4) * 100,
+}));
+
+function mist(red, green, blue) {
+    const surface = new Cairo.ImageSurface(Cairo.Format.ARGB32, 24, 24);
+    const context = new Cairo.Context(surface);
+    const gradient = new Cairo.RadialGradient(12, 12, 0, 12, 12, 12);
+    for (const [radius, alpha] of [[0, 0.5], [0.25, 0.3], [0.6, 0.09], [1, 0]])
+        gradient.addColorStopRGBA(radius, red, green, blue, alpha);
+    context.setSource(gradient);
+    context.paint();
+    context.$dispose();
+    return surface;
+}
+// Reuse two small soft sprites; no per-frame blur, texture generation, or library.
+const orange = mist(1, 0.43, 0.08);
+const purple = mist(0.72, 0.37, 1);
 
 export function voiceIntensity(rms) {
-    // Ignore low background noise, then compress loud sounds without clipping.
     const signal = Math.max(0, (rms - 0.008) / 0.07);
     return signal / (1 + signal);
 }
 
 export function drawOrb(context, width, height, bands, elapsed, command = false) {
-    const turn = elapsed * 0.12;
-    const cosine = Math.cos(turn);
-    const sine = Math.sin(turn);
-    const projected = points.map(point => {
-        const x = point.x * cosine + point.z * sine;
-        const z = point.z * cosine - point.x * sine;
-        // Low tones sway, mids fold vertically, highs scatter individual dots.
-        const low = bands[0] * (point.band === 0 ? 1 : 0.3);
-        const mid = bands[1] * (point.band === 1 ? 1 : 0.3);
-        const high = bands[2] * (point.band === 2 ? 1 : 0.2);
-        return {
-            x: x + low * 7.5 * Math.sin(elapsed * 3 + point.phase)
-                + high * 3.5 * Math.sin(elapsed * 11 + point.phase),
-            y: point.y * 0.94 - z * 0.34 + mid * 8 * Math.cos(elapsed * 4 + point.phase)
-                + high * 3.5 * Math.cos(elapsed * 13 + point.phase),
-            z: point.y * 0.34 + z * 0.94, size: point.size, high,
-        };
-    }).sort((a, b) => a.z - b.z);
+    const centers = clusters.map((cluster, i) => ({
+        x: cluster.x + 4 * noise(elapsed * 0.45 + cluster.phase)
+            + bands[0] * 4 * noise(elapsed * 1.3 + cluster.phase),
+        y: cluster.y + 4 * noise(elapsed * 0.45 + cluster.phase + 200)
+            + bands[1] * 4 * noise(elapsed * 1.6 + cluster.phase),
+        strength: bands[i % 3],
+    }));
     context.save();
     context.translate(width / 2, height / 2);
     const scale = Math.min(width, height) / 64;
     context.scale(scale, scale);
-    for (const point of projected) {
-        const depth = Math.max(0, Math.min(1, (point.z / 19 + 1) / 2));
-        const {x, y} = point;
-        const size = point.size * (0.75 + depth * 0.5);
-        // A narrow outline keeps the transparent orb legible over pale windows.
-        context.setSourceRGBA(command ? 0.22 : 0.08, command ? 0.10 : 0.24,
-            command ? 0.34 : 0.23, 0.15 + depth * 0.12);
-        context.arc(x, y, size + 0.45, 0, Math.PI * 2);
-        context.fill();
-        if (command)
-            context.setSourceRGBA(0.58 + depth * 0.22, 0.33 + depth * 0.26,
-                0.83 + depth * 0.15, 0.32 + depth * 0.62);
-        else
-            context.setSourceRGBA(0.24 + depth * 0.28, 0.64 + depth * 0.26,
-                0.57 + depth * 0.25 + point.high * 0.12, 0.32 + depth * 0.62);
-        context.arc(x, y, size, 0, Math.PI * 2);
-        context.fill();
+    for (const wisp of wisps) {
+        const center = centers[wisp.cluster];
+        const drift = 1.5 + bands[2] * 2;
+        const x = center.x + wisp.x + drift * noise(elapsed * 0.8 + wisp.phase);
+        const y = center.y + wisp.y + drift * noise(elapsed * 0.8 + wisp.phase + 300);
+        const size = wisp.size * (1 + 0.1 * noise(elapsed * 0.5 + wisp.phase));
+        context.save();
+        context.translate(x, y);
+        context.scale(size / 12, size / 12);
+        context.setSourceSurface(command ? purple : orange, -12, -12);
+        context.paintWithAlpha(0.65 + center.strength * 0.3);
+        context.restore();
     }
     context.restore();
 }
