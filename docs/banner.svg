@@ -13,12 +13,14 @@
       100% { transform: none; }
     }
     @keyframes flap-left {
-      0%,30%,60% { transform: rotate(42deg); }
-      15%,45%,80%,100% { transform: none; }
+      0%,30%,60% { transform: rotate(42deg) scale(1.6); }
+      15%,45% { transform: scale(1.6); }
+      80%,100% { transform: none; }
     }
     @keyframes flap-right {
-      0%,30%,60% { transform: rotate(-42deg); }
-      15%,45%,80%,100% { transform: none; }
+      0%,30%,60% { transform: rotate(-42deg) scale(1.6); }
+      15%,45% { transform: scale(1.6); }
+      80%,100% { transform: none; }
     }
   </style>
   <rect width="512" height="128" fill="#c6e5f5"/>
