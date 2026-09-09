@@ -45,7 +45,7 @@ The packager omits the numeric extension version because GNOME assigns it.
    with both archives and `SHA256SUMS`; link the installation instructions.
 2. Sign in and [upload the extension ZIP](https://extensions.gnome.org/upload/).
    Use a screenshot of the actual indicator/preferences and the native-companion
-   download link. The README photo can be added separately when selected.
+   download link.
 3. Include the reviewer note below. Address feedback before announcing store
    availability; uploading does not guarantee acceptance.
 4. Once approved, verify installation from the listing, install the native
