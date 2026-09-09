@@ -15,7 +15,7 @@ sudo apt install build-essential git cmake pkg-config libgtk-3-dev libpulse-dev 
   python3 gjs gir1.2-ibus-1.0 libglib2.0-bin
 git clone https://github.com/w4term3loon/ren.git
 cd ren
-./scripts/build.sh -DGGML_NATIVE=ON
+./scripts/build.sh
 python3 scripts/install.py
 ```
 
@@ -74,7 +74,8 @@ then leave memory. Input-method support varies between applications.
 
 `src/` contains the native app; `extension/` contains GNOME integration and visuals.
 The build script runs the existing engine, text, and installation checks.
-Fresh builds use portable CPU instructions; `GGML_NATIVE=ON` is for local builds.
+Builds use your CPU's available instructions. Use `-DGGML_NATIVE=OFF` only when
+building a portable binary for another machine; this is slower for transcription.
 
 See [RELEASING.md](RELEASING.md) for packaging, GNOME submission, and rollout.
 Report problems through [GitHub Issues](https://github.com/w4term3loon/ren/issues).

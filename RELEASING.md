@@ -20,6 +20,8 @@ installed extensions. Ren's own Preferences opens from its top-bar menu.
 1. Keep `CMakeLists.txt` and `extension/metadata.json` at the same release version.
    Add other GNOME versions only after testing them.
 2. Run `./scripts/build.sh` and `git diff --check`.
+   Local builds use CPU acceleration. Any future shared binary needs an explicit
+   portability plan; do not distribute a build made with `GGML_NATIVE=ON`.
 3. On a clean Ubuntu 24.04 session, install Ren and test live dictation, finish
    without submission, cancel, focus changes, clipboard fallback on/off, and
    voice commands on/off. Disable the extension during startup and recording;

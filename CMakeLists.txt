@@ -15,8 +15,8 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
-set(GGML_NATIVE OFF CACHE BOOL "Optimize for this CPU (local builds only)")
-# Keep GGML_NATIVE=OFF portable; local builds can opt into native CPU tuning.
+set(GGML_NATIVE ON CACHE BOOL "Optimize for this CPU (disable for portable binaries)")
+# Keep an explicit GGML_NATIVE=OFF build portable.
 foreach(feature SSE42 AVX AVX2 BMI2 FMA F16C)
   set(GGML_${feature} OFF CACHE BOOL "Enable ${feature} (local builds only)")
 endforeach()
