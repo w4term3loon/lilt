@@ -22,10 +22,12 @@ class InstallationTest(unittest.TestCase):
         settings = {'favorite-apps': ['other.desktop', 'io.github.lilt.Dictation.desktop'],
                     'enabled-extensions': ['other@example.com', 'ren@local'],
                     'disabled-extensions': [uuid]}
+        commands = []
         real_run = subprocess.run
 
         def desktop(command, **kwargs):
             command = list(command)
+            commands.append(command)
             output = ''
             if command[0] == 'glib-compile-schemas':
                 return real_run(command, **kwargs)
@@ -76,9 +78,30 @@ class InstallationTest(unittest.TestCase):
                     with patch.object(sys, 'argv', [str(script), *options]):
                         runpy.run_path(str(script), run_name='__main__')
                     self.assertFalse((prefix / 'bin/ren').exists())
-                    self.assertFalse((extensions / uuid).exists())
+                    self.assertEqual((extensions / uuid).exists(), '--app-only' in options)
                     self.assertFalse((data / 'applications/io.github.ren.Dictation.desktop').exists())
                     self.assertFalse((data / 'dbus-1/services/io.github.ren.Dictation.service').exists())
+
+                # Native updates/removal must preserve the store's files, version and enable state.
+                store_metadata = extensions / uuid / 'metadata.json'
+                store_metadata.write_text(json.dumps({'uuid': uuid, 'version': 1}))
+                store_files = {str(path.relative_to(extensions)): path.read_bytes()
+                               for path in extensions.rglob('*') if path.is_file()}
+                for update in (False, True):
+                    if update:
+                        settings['enabled-extensions'].remove(uuid)
+                        settings['disabled-extensions'].append(uuid)
+                    original_settings = {key: value[:] for key, value in settings.items()}
+                    commands.clear()
+                    if update:
+                        uninstall('--app-only')
+                    install(binary, app_only=True)
+                    self.assertEqual(settings, original_settings)
+                    self.assertEqual(store_files, {str(path.relative_to(extensions)): path.read_bytes()
+                                                   for path in extensions.rglob('*') if path.is_file()})
+                    self.assertFalse(any(command[0] == 'gnome-extensions' for command in commands))
+                    self.assertEqual((prefix / 'bin/ren').read_bytes(), binary.read_bytes())
+                    self.assertTrue((data / 'dbus-1/services/io.github.ren.Dictation.service').is_file())
 
                 uninstall()
                 self.assertTrue(all(path.read_text() == 'user data' for path in retained))

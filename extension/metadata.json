@@ -1,10 +1,10 @@
 {
   "uuid": "ren@w4term3loon.github.io",
   "name": "Ren",
-  "description": "Local voice dictation: a shortcut, a small recording indicator, and direct text insertion.",
+  "description": "Local voice typing with live text and optional voice commands. Requires the Ren native app and a local English Whisper model. Accesses the clipboard for optional text fallback and the Copy last dictation action.",
   "url": "https://github.com/w4term3loon/ren",
   "shell-version": ["46"],
   "settings-schema": "org.gnome.shell.extensions.ren",
-  "version": 31,
+  "version": 32,
   "version-name": "0.6.0"
 }

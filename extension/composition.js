@@ -9,12 +9,23 @@ const IBUS_NAME = 'org.freedesktop.IBus';
 const IBUS_PATH = '/org/freedesktop/IBus';
 const TIMEOUT = 3000;
 
-function connect(address) {
+function connect(address, session) {
+    if (session.cancelled)
+        return Promise.reject(new Error('Dictation cancelled.'));
     return new Promise((resolve, reject) => {
+        const cancellable = new Gio.Cancellable();
+        const source = GLib.timeout_add(GLib.PRIORITY_DEFAULT, TIMEOUT, () => {
+            session.sources.delete(source);
+            cancellable.cancel();
+            return GLib.SOURCE_REMOVE;
+        });
+        session.sources.set(source, () => cancellable.cancel());
         Gio.DBusConnection.new_for_address(address,
             Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT |
             Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION,
-            null, null, (_source, result) => {
+            null, cancellable, (_source, result) => {
+                if (session.sources.delete(source))
+                    GLib.source_remove(source);
                 try {
                     resolve(Gio.DBusConnection.new_for_address_finish(result));
                 } catch (error) {
@@ -54,22 +65,24 @@ async function engineName(connection) {
 }
 
 async function waitForDisconnect(connection, name) {
-    const deadline = GLib.get_monotonic_time() + TIMEOUT * 1000;
-    while (true) {
+    const hasOwner = async () => {
         const reply = await call(connection, 'NameHasOwner',
             new GLib.Variant('(s)', [name]), 'org.freedesktop.DBus',
             'org.freedesktop.DBus', '/org/freedesktop/DBus');
-        if (!reply.get_child_value(0).get_boolean())
-            return;
-        if (GLib.get_monotonic_time() >= deadline)
-            throw new Error('The keyboard input service did not finish resetting.');
-        await new Promise(resolve => {
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10, () => {
-                resolve();
-                return GLib.SOURCE_REMOVE;
-            });
-        });
+        return reply.get_child_value(0).get_boolean();
+    };
+    if (!await hasOwner())
+        return;
+    // The local connection is already closed and cannot answer. Let GIO wait
+    // for the daemon's disconnect/error with its native deadline, then verify
+    // removal once. Cleanup never creates a polling timer after disable().
+    try {
+        await call(connection, 'Ping', null, 'org.freedesktop.DBus.Peer', name, '/');
+    } catch (_error) {
+        // A missing owner or unanswered call is expected after local close.
     }
+    if (await hasOwner())
+        throw new Error('The keyboard input service did not finish resetting.');
 }
 
 function componentDescription(name) {
@@ -105,24 +118,10 @@ function close(connection) {
 }
 
 function flush(connection) {
-    return new Promise((resolve, reject) => {
-        const cancellable = new Gio.Cancellable();
-        let timeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, TIMEOUT, () => {
-            timeout = 0;
-            cancellable.cancel();
-            return GLib.SOURCE_REMOVE;
-        });
-        connection.flush(cancellable, (source, result) => {
-            if (timeout)
-                GLib.source_remove(timeout);
-            try {
-                source.flush_finish(result);
-                resolve();
-            } catch (error) {
-                reject(error);
-            }
-        });
-    });
+    // A reply on this connection proves preceding signals reached the daemon.
+    // The native call deadline needs no extension-owned timeout during cleanup.
+    return call(connection, 'GetId', null, 'org.freedesktop.DBus',
+        'org.freedesktop.DBus', '/org/freedesktop/DBus');
 }
 
 // One temporary input-method engine supplies editable composition in the actual
@@ -146,7 +145,7 @@ export class Composition {
             originalContext: null, focusedContext: null, previousEngine: null,
             capabilities: 0, cancelled: false, closing: false, ready: false,
             committed: false, lost: false, focusSerial: 0,
-            sources: new Set(),
+            sources: new Map(),
         };
         this._session = session;
         session.startup = this._begin(session);
@@ -163,7 +162,7 @@ export class Composition {
             const address = IBus.get_address();
             if (!address)
                 throw new Error('The system input service is unavailable. Log out and back in.');
-            session.connection = await connect(address);
+            session.connection = await connect(address, session);
             session.closedSignal = session.connection.connect('closed', () => {
                 if (!session.closing)
                     this._lost(session, 'The system input service disconnected.');
@@ -186,6 +185,10 @@ export class Composition {
                 throw new Error('Enable embedded preedit text in IBus Preferences.');
             this._check(session);
 
+            // Prepare restoration before registering the temporary engine, so
+            // disposal never starts a new connection or connection deadline.
+            session.control = await connect(address, session);
+            this._check(session);
             session.factory = IBus.Factory.new(session.connection);
             session.factory.connect('create-engine', (_factory, name) => {
                 if (name !== session.name || session.cancelled || session.closing)
@@ -296,6 +299,7 @@ export class Composition {
     }
 
     _waitForFocus(session) {
+        this._check(session);
         return new Promise((resolve, reject) => {
             const deadline = GLib.get_monotonic_time() + TIMEOUT * 1000;
             const source = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10, () => {
@@ -317,8 +321,16 @@ export class Composition {
                 }
                 return GLib.SOURCE_CONTINUE;
             });
-            session.sources.add(source);
+            session.sources.set(source, () => reject(new Error('Dictation cancelled.')));
         });
+    }
+
+    _stopSources(session) {
+        for (const [source, cancel] of session.sources) {
+            GLib.source_remove(source);
+            cancel();
+        }
+        session.sources.clear();
     }
 
     _lost(session, reason) {
@@ -403,6 +415,7 @@ export class Composition {
         if (!session)
             return Promise.resolve();
         session.cancelled = true;
+        this._stopSources(session);
         this._clear(session);
         if (!session.finish) {
             session.finish = (async () => {
@@ -429,20 +442,18 @@ export class Composition {
         session.closing = true;
         session.ready = false;
         this._clear(session);
-        for (const source of session.sources)
-            GLib.source_remove(source);
-        session.sources.clear();
+        this._stopSources(session);
         const connection = session.connection;
-        let control = null;
+        const control = session.control;
         let restore = session.previousEngine;
         let failure = null;
         try {
-            if (connection && !connection.is_closed() && session.registered) {
-                control = await connect(IBus.get_address());
+            if (control && session.registered) {
                 const current = await engineName(control);
                 // Preserve an input source explicitly selected during dictation.
                 restore = current === session.name ? session.previousEngine : current;
-                await flush(connection);
+                if (!connection.is_closed())
+                    await flush(connection);
             }
         } catch (error) {
             failure = error;
@@ -457,7 +468,7 @@ export class Composition {
             session.connection = null;
         }
         try {
-            if (control && restore) {
+            if (control && restore && session.registered) {
                 // IBus 1.5.29 checks only its dynamically registered engines when
                 // a component disappears. It can therefore clear an ordinary xkb
                 // engine even if we restored that engine before disconnecting.
@@ -478,6 +489,7 @@ export class Composition {
             failure = error;
         } finally {
             await close(control);
+            session.control = null;
             if (session === this._session)
                 this._session = null;
         }
@@ -487,6 +499,8 @@ export class Composition {
 
     dispose() {
         this._disposed = true;
+        this._onKey = null;
+        this._onLost = null;
         return this.cancel();
     }
 }

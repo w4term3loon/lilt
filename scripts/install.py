@@ -34,7 +34,15 @@ def copy(source, target):
         staged.unlink(missing_ok=True)
 
 
-def install(binary):
+def copy_app(binary):
+    copy(binary, PREFIX / 'bin/ren')
+    for name in ('download-model.py', 'uninstall.py'):
+        copy(ROOT / 'scripts' / name, PREFIX / 'share/ren' / name)
+    for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'LICENSES/whisper.cpp-MIT.txt'):
+        copy(ROOT / name, PREFIX / 'share/ren' / name)
+
+
+def install(binary, app_only=False):
     if not binary.is_file():
         raise ValueError('Build first: ./scripts/build.sh')
     if not DATA.is_absolute():
@@ -44,43 +52,44 @@ def install(binary):
         raise ValueError('The home path must not contain %, = or line breaks.')
     uuid = json.loads((ROOT / 'extension/metadata.json').read_text())['uuid']
     extensions = DATA / 'gnome-shell/extensions'
-    extensions.mkdir(parents=True, exist_ok=True)
-    target = extensions / uuid
-    with tempfile.TemporaryDirectory(prefix='.ren-', dir=extensions) as temporary:
-        prepared = Path(temporary) / uuid
-        prepared.mkdir()
-        files = [*ROOT.glob('extension/*.js'), *ROOT.glob('extension/*.svg'), ROOT / 'extension/metadata.json',
-                 ROOT / 'extension/stylesheet.css', *ROOT.glob('extension/schemas/*.xml')]
-        for source in files:
-            copy(source, prepared / source.relative_to(ROOT / 'extension'))
-        copy(ROOT / 'LICENSE', prepared / 'LICENSE')
-        subprocess.run(['glib-compile-schemas', '--strict', str(prepared / 'schemas')], check=True)
-        copy(binary, PREFIX / 'bin/ren')
-        for name in ('download-model.py', 'uninstall.py'):
-            copy(ROOT / 'scripts' / name, PREFIX / 'share/ren' / name)
-        for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'LICENSES/whisper.cpp-MIT.txt'):
-            copy(ROOT / name, PREFIX / 'share/ren' / name)
-        previous = Path(temporary) / 'previous'
-        if target.exists() or target.is_symlink():
-            target.rename(previous)
-        try:
-            prepared.rename(target)
-        except OSError:
-            if previous.exists() or previous.is_symlink():
-                previous.rename(target)
-            raise
+    if not app_only:
+        extensions.mkdir(parents=True, exist_ok=True)
+        target = extensions / uuid
+        with tempfile.TemporaryDirectory(prefix='.ren-', dir=extensions) as temporary:
+            prepared = Path(temporary) / uuid
+            prepared.mkdir()
+            files = [*ROOT.glob('extension/*.js'), *ROOT.glob('extension/*.svg'), ROOT / 'extension/metadata.json',
+                     ROOT / 'extension/stylesheet.css', *ROOT.glob('extension/schemas/*.xml')]
+            for source in files:
+                copy(source, prepared / source.relative_to(ROOT / 'extension'))
+            copy(ROOT / 'LICENSE', prepared / 'LICENSE')
+            subprocess.run(['glib-compile-schemas', '--strict', str(prepared / 'schemas')], check=True)
+            copy_app(binary)
+            previous = Path(temporary) / 'previous'
+            if target.exists() or target.is_symlink():
+                target.rename(previous)
+            try:
+                prepared.rename(target)
+            except OSError:
+                if previous.exists() or previous.is_symlink():
+                    previous.rename(target)
+                raise
+
+    else:
+        copy_app(binary)
 
     alias = PREFIX / 'bin/youlilt'
     if alias.is_symlink() and alias.resolve() in (PREFIX / 'bin/lilt', PREFIX / 'bin/ren'):
         alias.unlink()
     # Retire old launchers together; stale bus names cause activation timeouts.
     for old in ('ren', 'lilt', 'ptt'):
-        run('gnome-extensions', 'disable', f'{old}@local')
-        legacy = extensions / f'{old}@local'
-        if legacy.is_symlink():
-            legacy.unlink()
-        elif legacy.exists():
-            shutil.rmtree(legacy)
+        if not app_only:
+            run('gnome-extensions', 'disable', f'{old}@local')
+            legacy = extensions / f'{old}@local'
+            if legacy.is_symlink():
+                legacy.unlink()
+            elif legacy.exists():
+                shutil.rmtree(legacy)
         if old == 'ren':
             continue
         old_binary = PREFIX / 'bin' / old
@@ -125,7 +134,7 @@ def install(binary):
         '--object-path', '/org/freedesktop/DBus', '--method', 'org.freedesktop.DBus.ReloadConfig')
     run('gtk-update-icon-cache', '-f', '-t', str(DATA / 'icons/hicolor'))
     run('update-desktop-database', str(DATA / 'applications'))
-    if not run('gnome-extensions', 'enable', uuid):
+    if not app_only and not run('gnome-extensions', 'enable', uuid):
         # GNOME discovers a newly installed extension at the next login.
         # The disabled list takes precedence, including after a reinstall.
         for key in ('enabled-extensions', 'disabled-extensions'):
@@ -137,14 +146,15 @@ def install(binary):
                 entries.append(uuid)
             subprocess.run(['gsettings', 'set', 'org.gnome.shell', key, repr(entries)],
                            check=True, timeout=5)
-    print('Installed Ren. Log out and back in to load the extension.')
+    print('Installed Ren app.' if app_only else 'Installed Ren. Log out and back in to load the extension.')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, default=ROOT / 'build/ren')
+    parser.add_argument('--app-only', action='store_true', help='Keep the extension managed by GNOME Extensions.')
     args = parser.parse_args()
     try:
-        install(args.binary)
+        install(args.binary, args.app_only)
     except (OSError, ValueError, SyntaxError, subprocess.SubprocessError) as error:
         parser.exit(1, f'Installation failed: {error}\n')

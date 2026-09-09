@@ -31,6 +31,7 @@ const BUS_XML = `<node><interface name="${BUS_NAME}">
     <property name="FinishShortcut" type="s" access="read"/>
     <property name="LivePreview" type="b" access="read"/>
     <property name="CopyToClipboard" type="b" access="read"/>
+    <property name="VoiceCommands" type="b" access="read"/>
     <property name="HasTranscript" type="b" access="read"/>
     <property name="InputWarning" type="s" access="read"/>
     <signal name="Transcript"><arg type="s" name="text"/></signal>
@@ -405,6 +406,7 @@ export default class RenExtension extends Extension {
         this._sessionFinish = parseShortcut(this._finishShortcut) ?? parseShortcut('Return');
         this._sessionStart = parseShortcut(this._settings.get_strv('toggle-shortcut')[0]);
         this._showLive = this._proxy.LivePreview !== false;
+        this._sessionCommands = this._proxy.VoiceCommands !== false;
         this._sessionLive = Boolean(this._target);
         this._finishWaiting = false;
         this._cancelled = false;
@@ -667,12 +669,13 @@ export default class RenExtension extends Extension {
         if (!this._session || this._cancelled || this._autoCommand ||
             !ACTIVE.has(this._state) || this._pendingText !== null)
             return;
-        this._orbCommandPreview = isBrowserCommandPreview(text) || startsBrowserCommand(text);
+        this._orbCommandPreview = this._sessionCommands &&
+            (isBrowserCommandPreview(text) || startsBrowserCommand(text));
         const draft = this._orbCommandPreview ? '' : text;
         this._latestPartial = draft;
         if (this._showLive)
             this._composition?.update(draft);
-        if (startsBrowserCommand(text)) {
+        if (this._sessionCommands && startsBrowserCommand(text)) {
             this._autoCommand = true;
             this._commandAnimating = true;
             this._pendingText = 'open browser';
@@ -736,7 +739,7 @@ export default class RenExtension extends Extension {
                 return;
             }
             const text = this._cancelled ? null : this._pendingText;
-            const openBrowser = isBrowserCommand(text);
+            const openBrowser = this._sessionCommands && isBrowserCommand(text);
             this._pendingText = null;
             this._inserting = true;
             // Keep the same particles on screen while input-method cleanup finishes.
@@ -812,7 +815,7 @@ export default class RenExtension extends Extension {
     }
 
     _openBrowser() {
-        if (!this._enabled || this._cancelled || Main.overview.visible || Main.modalCount > 0)
+        if (!this._enabled || !this._sessionCommands || this._cancelled || Main.overview.visible || Main.modalCount > 0)
             return;
         try {
             const info = Gio.AppInfo.get_default_for_type('x-scheme-handler/https', false);
@@ -855,7 +858,7 @@ export default class RenExtension extends Extension {
             this._cancellable, (proxy, result) => {
                 try {
                     const [text] = proxy.call_finish(result).deep_unpack();
-                    if (current() && text && !isBrowserCommand(text)) {
+                    if (current() && text) {
                         St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
                         Main.notify('Ren', 'Last dictation copied to clipboard.');
                     }
