@@ -1,4 +1,4 @@
-<img src="docs/banner.svg" alt="Ren wren icon on a baby-blue background" width="100%">
+<img src="docs/banner.svg" alt="Ren wren on a baby-blue background" width="100%">
 
 # Ren
 
