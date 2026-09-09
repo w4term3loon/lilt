@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="256" viewBox="0 0 512 128">
+  <title>Ren</title>
+  <rect width="512" height="128" fill="#c6e5f5"/>
+  <defs><clipPath id="gray-crown"><rect width="128" height="128" rx="28"/></clipPath></defs>
+  <g transform="translate(192)">
+    <g clip-path="url(#gray-crown)">
+      <rect width="128" height="128" fill="#c6e5f5"/>
+      <path d="M20 64C20 33 35 14 64 14s44 19 44 50v20c0 20 20 28 24 44H-4c4-16 24-24 24-44Z" fill="#737c80"/>
+      <path d="M20 94C17 109 0 117-4 128h22c6-10 8-22 2-34Zm88 0c3 15 20 23 24 34h-22c-6-10-8-22-2-34Z" fill="#5e696e"/>
+      <path d="M26 70c10 7 23 9 38 4 15 5 28 3 38-4v26c0 12 4 24 10 32H16c6-8 10-20 10-32Z" fill="#d38a50"/>
+      <circle cx="42" cy="61" r="4.2" fill="#202322"/>
+      <circle cx="86" cy="61" r="4.2" fill="#202322"/>
+      <path d="M57 70q7-5 14 0l-7 10Z" fill="#343b3d"/>
+    </g>
+  </g>
+</svg>

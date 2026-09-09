@@ -1,3 +1,5 @@
+<img src="docs/banner.svg" alt="Ren wren icon on a baby-blue background" width="100%">
+
 # Ren
 
 Local voice typing for Ubuntu. Speak into the focused application, see text as
