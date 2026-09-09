@@ -67,11 +67,6 @@ their rule about default clipboard shortcuts. Recheck the current
 and [extension ZIP format](https://gjs.guide/extensions/overview/anatomy.html#extension-zip)
 before uploading. A clean-session smoke test and GNOME review remain release gates.
 
-## Small command candidates
-
-- **Open files:** open the file manager.
-- **Open terminal:** open a terminal without running anything.
-- **Open settings:** open Ubuntu Settings.
-
-These are proposals, not implemented commands. Keep explicit app names and the
-global Voice commands switch; avoid interpreting arbitrary requests as commands.
+The launcher now accepts installed app names, including Terminal, Files, and
+Settings when available. Check launching and focusing an existing window, unknown
+and ambiguous names, and the Voice commands opt-out before publishing.

@@ -259,11 +259,10 @@ void App::toggle() {
                 "PartialTranscript", g_variant_new("(su)", text.c_str(), prefix), nullptr);
         });
     };
-    cb.on_result = [this, generation, owner, commands = voice_commands_](std::string text) {
-        dispatch([this, generation, owner, commands, text] {
+    cb.on_result = [this, generation, owner](std::string text) {
+        dispatch([this, generation, owner, text] {
             if (generation != generation_ || shell_owner_ != owner || owner.empty()) return;
-            if (!commands || !g_regex_match_simple("^open browser(?:[\\s.!?,]|$)", text.c_str(), G_REGEX_CASELESS, G_REGEX_MATCH_DEFAULT))
-                last_transcript_ = text;
+            last_transcript_ = text;
             if (!text.empty()) g_dbus_connection_emit_signal(bus_, owner.c_str(),
                 kPath, kInterface, "Transcript", g_variant_new("(s)", text.c_str()), nullptr);
         });
@@ -535,7 +534,7 @@ void App::build_ui() {
     copy_switch_ = switch_row("Copy to clipboard", copy_to_clipboard_, 3);
     gtk_widget_set_tooltip_text(copy_switch_, "Copy finished text when there is no writable text field.");
     commands_switch_ = switch_row("Voice commands", voice_commands_, 4);
-    gtk_widget_set_tooltip_text(commands_switch_, "Recognize “open browser” as a command instead of dictation.");
+    gtk_widget_set_tooltip_text(commands_switch_, "Say “open” followed by an installed app's name.");
     auto* divider = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
     gtk_style_context_add_class(gtk_widget_get_style_context(divider), "ren-divider");
     gtk_grid_attach(GTK_GRID(grid), divider, 0, 5, 2, 1);

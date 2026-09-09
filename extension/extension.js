@@ -12,7 +12,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-import {insertionText, isBrowserCommand, isBrowserCommandPreview, startsBrowserCommand} from './text.js';
+import {insertionText, applicationName, commandApplication, isCommandPreview} from './text.js';
 import {Composition} from './composition.js';
 import {drawOrb, sampleOrb, voiceIntensity} from './orb.js';
 
@@ -407,6 +407,7 @@ export default class RenExtension extends Extension {
         this._sessionStart = parseShortcut(this._settings.get_strv('toggle-shortcut')[0]);
         this._showLive = this._proxy.LivePreview !== false;
         this._sessionCommands = this._proxy.VoiceCommands !== false;
+        this._commandApps = this._sessionCommands ? this._readCommandApps() : null;
         this._sessionLive = Boolean(this._target);
         this._finishWaiting = false;
         this._cancelled = false;
@@ -670,28 +671,39 @@ export default class RenExtension extends Extension {
             !ACTIVE.has(this._state) || this._pendingText !== null)
             return;
         this._orbCommandPreview = this._sessionCommands &&
-            (isBrowserCommandPreview(text) || startsBrowserCommand(text));
+            isCommandPreview(text, this._commandApps);
         const draft = this._orbCommandPreview ? '' : text;
         this._latestPartial = draft;
         if (this._showLive)
             this._composition?.update(draft);
-        if (this._sessionCommands && startsBrowserCommand(text)) {
-            this._autoCommand = true;
-            this._commandAnimating = true;
-            this._pendingText = 'open browser';
-            // No final decode is needed for a recognized fixed command.
-            this._call('Cancel');
-            const generation = this._generation;
+        const app = this._sessionCommands && commandApplication(text, this._commandApps, true);
+        if (app)
+            this._startCommand(app, text);
+    }
+
+    _startCommand(app, text) {
+        this._autoCommand = true;
+        this._commandAnimating = true;
+        this._orbCommandPreview = true;
+        this._pendingApp = app;
+        this._pendingText = insertionText(text);
+        this._composition?.update('');
+        const generation = this._generation;
+        // Cancel also clears recovery text and invalidates late native results.
+        this._call('Cancel', null, () => {
+            if (generation !== this._generation || this._cancelled)
+                return;
             this._later(420, () => {
-                if (generation !== this._generation)
+                if (generation !== this._generation || this._cancelled)
                     return;
                 this._commandAnimating = false;
                 this._finishSession();
             });
-        }
+        });
     }
 
     _clearDraft() {
+        this._pendingApp = null;
         this._latestPartial = null;
         this._orbCommandPreview = false;
         this._composition?.update('');
@@ -701,6 +713,11 @@ export default class RenExtension extends Extension {
         if (!this._session || this._cancelled || this._autoCommand)
             return;
         this._clearDraft();
+        const app = this._sessionCommands && commandApplication(text, this._commandApps);
+        if (app) {
+            this._startCommand(app, text);
+            return;
+        }
         this._pendingText = insertionText(text);
         this._finishSession();
     }
@@ -739,18 +756,19 @@ export default class RenExtension extends Extension {
                 return;
             }
             const text = this._cancelled ? null : this._pendingText;
-            const openBrowser = this._sessionCommands && isBrowserCommand(text);
+            const app = this._cancelled ? null : this._pendingApp;
+            this._pendingApp = null;
             this._pendingText = null;
             this._inserting = true;
             // Keep the same particles on screen while input-method cleanup finishes.
-            if (!text || openBrowser) {
+            if (!text || app) {
                 this._stopOrb();
                 this._pill.hide();
             }
             if (this._sessionLive) {
                 let inserted = false;
                 try {
-                    if (!openBrowser && text && this._target && global.display.focus_window === this._target &&
+                    if (!app && text && this._target && global.display.focus_window === this._target &&
                         !Main.overview.visible && Main.modalCount === 0) {
                         if (!await this._composition.commit(text))
                             throw new Error('The transcript could not be inserted.');
@@ -772,17 +790,17 @@ export default class RenExtension extends Extension {
                             this._showFeedback('inserted');
                         else
                             this._drawState();
-                        if (openBrowser && !this._cancelled)
-                            this._openBrowser();
+                        if (app && !this._cancelled)
+                            this._openApplication(app);
                     }
                 }
                 return;
             }
             this._session = false;
             this._releaseGrab();
-            if (openBrowser) {
+            if (app) {
                 this._clearTarget();
-                this._openBrowser();
+                this._openApplication(app);
                 return;
             }
             if (!text) {
@@ -814,20 +832,43 @@ export default class RenExtension extends Extension {
         });
     }
 
-    _openBrowser() {
+    _readCommandApps() {
+        const system = Shell.AppSystem.get_default();
+        const apps = new Map();
+        for (const info of system.get_installed()) {
+            if (!info.should_show() || !info.get_id())
+                continue;
+            for (const name of [info.get_name(), info.get_display_name(), info.get_string?.('Name')]) {
+                if (!name)
+                    continue;
+                const key = applicationName(name);
+                const duplicate = apps.has(key) && apps.get(key)?.get_id() !== info.get_id();
+                apps.set(key, duplicate ? null : info);
+            }
+        }
+        const browser = Gio.AppInfo.get_default_for_type('x-scheme-handler/https', false);
+        const terminal = system.lookup_app('org.gnome.Terminal.desktop')?.get_app_info() ??
+            system.lookup_app('org.gnome.Console.desktop')?.get_app_info();
+        if (browser)
+            apps.set('browser', browser);
+        if (terminal)
+            apps.set('terminal', terminal);
+        return apps;
+    }
+
+    _openApplication(info) {
         if (!this._enabled || !this._sessionCommands || this._cancelled || Main.overview.visible || Main.modalCount > 0)
             return;
         try {
-            const info = Gio.AppInfo.get_default_for_type('x-scheme-handler/https', false);
-            if (!info)
-                throw new Error('Set a default browser in Ubuntu Settings.');
+            // Speech arrives outside a key event; a fresh timestamp gives focus.
+            const timestamp = global.display.get_current_time_roundtrip();
             const app = Shell.AppSystem.get_default().lookup_app(info.get_id());
             if (app)
-                app.activate();
+                app.activate_full(-1, timestamp);
             else
-                info.launch([], global.create_app_launch_context(0, -1));
+                info.launch([], global.create_app_launch_context(timestamp, -1));
         } catch (error) {
-            this._error(`Could not open the browser: ${error.message}`);
+            this._error(`Could not open ${info.get_name()}: ${error.message}`);
         }
     }
 
@@ -924,6 +965,7 @@ export default class RenExtension extends Extension {
 
     _clearTarget() {
         this._clearDraft();
+        this._commandApps = null;
         if (this._target && this._targetSignal)
             this._target.disconnect(this._targetSignal);
         if (this._targetFocusSignal)

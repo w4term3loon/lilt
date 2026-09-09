@@ -8,15 +8,28 @@ export function insertionText(text) {
         .trim();
 }
 
-export function isBrowserCommand(text) {
-    return /^open browser[.!?]*$/i.test(insertionText(text));
+export function applicationName(text) {
+    return insertionText(text).normalize('NFKC').toLowerCase().replace(/[.!?]+$/, '').trim();
 }
 
-export function startsBrowserCommand(text) {
-    return /^open browser(?:[\s.!?,]|$)/i.test(insertionText(text));
+export function commandName(text) {
+    const phrase = applicationName(text);
+    return phrase.startsWith('open ') ? phrase.slice(5) : null;
 }
 
-export function isBrowserCommandPreview(text) {
-    const phrase = insertionText(text).toLowerCase().replace(/[.!?]+$/, '');
-    return phrase === 'open' || (phrase.startsWith('open ') && 'open browser'.startsWith(phrase));
+export function commandApplication(text, apps, partial = false) {
+    const name = commandName(text);
+    if (!name || !apps?.get(name))
+        return null;
+    // A draft saying "open Code" may still become "open Code Insiders".
+    if (partial && [...apps.keys()].some(candidate => candidate.startsWith(`${name} `)))
+        return null;
+    return apps.get(name);
+}
+
+export function isCommandPreview(text, apps) {
+    if (applicationName(text) === 'open')
+        return true;
+    const name = commandName(text);
+    return Boolean(name && apps && [...apps.keys()].some(candidate => candidate.startsWith(name)));
 }

@@ -40,9 +40,14 @@ Changing focus cancels insertion. When there is no writable field, **Copy to
 clipboard** copies the result instead; this is optional and enabled by default.
 **Copy last dictation** remains available until the next recording or Quit.
 
-Say **“open browser”** first to launch or focus your default browser. The command
-executes without Enter and stays out of the text field. Turn off **Voice commands**
-to treat every phrase as dictation.
+Say **“open terminal”**, **“open browser”**, or **“open” followed by an installed
+app's full name** to launch or focus it through GNOME. Browser uses your default;
+terminal opens GNOME Terminal, or Console when Terminal is unavailable.
+
+A complete, unambiguous name executes without Enter and stays out of the text
+field. If it could become a longer app name, press Enter to confirm the shorter
+one. Unknown or ambiguous names remain dictation. Turn off **Voice commands** to
+treat every phrase as dictation.
 
 ## Models
 
